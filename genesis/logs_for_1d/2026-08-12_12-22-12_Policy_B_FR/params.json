@@ -1,0 +1,126 @@
+{
+  "policy": "/home/rml/Documents/george/genesis/logs/Policy_B/model_1499.pt",
+  "run": "Policy_B",
+  "leg": "FR",
+  "foot_sphere_radius_m": 0.022,
+  "mpm_cfg": {
+    "grid_density": 48,
+    "coup_friction": 0.4,
+    "coup_softness": 0.01,
+    "wall_height": 0.5,
+    "wall_thickness": 0.03,
+    "bounds_lower": [
+      1,
+      -0.4864,
+      -0.1
+    ],
+    "bounds_upper": [
+      4.6576,
+      0.4864,
+      0.381
+    ],
+    "patches": [
+      {
+        "name": "stiff_mud",
+        "material": "elastic",
+        "E": 1000000.0,
+        "nu": 0.35,
+        "rho": 1800.0,
+        "patch_lower": [
+          1.1,
+          -0.38,
+          0.0
+        ],
+        "patch_upper": [
+          4.55,
+          0.38,
+          0.06
+        ],
+        "color": [
+          0.3,
+          0.2,
+          0.12
+        ]
+      },
+      {
+        "name": "soft_mud",
+        "material": "sand",
+        "E": 20000.0,
+        "nu": 0.35,
+        "rho": 1500.0,
+        "friction_angle": 30.0,
+        "patch_lower": [
+          1.1,
+          -0.38,
+          0.065
+        ],
+        "patch_upper": [
+          4.55,
+          0.38,
+          0.15
+        ],
+        "color": [
+          0.78,
+          0.62,
+          0.46
+        ]
+      }
+    ]
+  },
+  "intrusion": {
+    "start_clearance_m": 0.03,
+    "depth_m": 0.03,
+    "rate_m_s": 0.02,
+    "hold_s": 0.2,
+    "retract": true
+  },
+  "env_cfg": {
+    "kp": 25.0,
+    "kd": 0.5,
+    "effort_limit": 23.5,
+    "joint_names": [
+      "FR_hip_joint",
+      "FR_thigh_joint",
+      "FR_calf_joint",
+      "FL_hip_joint",
+      "FL_thigh_joint",
+      "FL_calf_joint",
+      "RR_hip_joint",
+      "RR_thigh_joint",
+      "RR_calf_joint",
+      "RL_hip_joint",
+      "RL_thigh_joint",
+      "RL_calf_joint"
+    ],
+    "default_joint_angles": {
+      "FL_hip_joint": 0.1,
+      "RL_hip_joint": 0.1,
+      "FR_hip_joint": -0.1,
+      "RR_hip_joint": -0.1,
+      "FL_thigh_joint": 0.8,
+      "FR_thigh_joint": 0.8,
+      "RL_thigh_joint": 1.0,
+      "RR_thigh_joint": 1.0,
+      "FL_calf_joint": -1.5,
+      "FR_calf_joint": -1.5,
+      "RL_calf_joint": -1.5,
+      "RR_calf_joint": -1.5
+    }
+  },
+  "dt": 0.02,
+  "substeps": 60,
+  "metrics": {
+    "peak_abs_fz_n": 5.448848247528076,
+    "peak_abs_fx_n": 0.4342557191848755,
+    "peak_abs_fy_n": 0.7847152948379517,
+    "peak_abs_tau_hip_nm": 1.209372639656067,
+    "peak_abs_tau_thigh_nm": 0.9125217795372009,
+    "peak_abs_tau_calf_nm": 1.3816685676574707,
+    "fz_at_max_depth_n": 5.440968990325928
+  },
+  "video": {
+    "file": "rollout.mp4",
+    "fps": 50,
+    "includes_settle_phases": true
+  }
+}

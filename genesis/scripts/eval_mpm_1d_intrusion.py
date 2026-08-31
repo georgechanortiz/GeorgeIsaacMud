@@ -450,7 +450,10 @@ def main():
     parser.add_argument("--tuck-calf", type=float, default=-2.7, metavar="RAD",
                          help="calf angle for the three non-intruding legs (URDF limit is -2.72)")
     parser.add_argument("--headless", action="store_true", help="skip the interactive viewer window")
-    parser.add_argument("--record", action="store_true", help="save rollout.mp4 alongside the plots")
+    parser.add_argument("--no-video", action="store_true",
+                         help="skip rollout.mp4. Video is on by default (as in eval_mpm.py --reporting) and "
+                              "covers the mud-settle and leg-settle phases as well as the ramp, so the "
+                              "approach and first contact are visible, not just the recorded window.")
     args = parser.parse_args()
 
     gs.init(backend=gs.cpu if args.cpu else gs.gpu, precision="32", logging_level="warning")
@@ -486,10 +489,12 @@ def main():
     leg = args.leg
     bench_dof_pos = build_bench_pose(env_cfg, leg, args.tuck_thigh, args.tuck_calf)
 
+    # Provisional framing; re-aimed at the foot once the scene is built and its actual
+    # position is known (the camera has to exist before build()).
     cam_kwargs = dict(res=(1280, 720), pos=(cx + 0.6, -1.0, slab_top + 0.6), lookat=(cx, 0.0, slab_top), fov=40)
     env = Go2MPM1DIntrusionEnv(
         env_cfg, mpm_cfg, bench_dof_pos,
-        show_viewer=not args.headless, record=args.record, cam_kwargs=cam_kwargs,
+        show_viewer=not args.headless, record=not args.no_video, cam_kwargs=cam_kwargs,
     )
     patch_counts = {p["name"]: int(e.n_particles) for p, e in zip(mpm_cfg["patches"], env.mud_patches)}
     print(f"MPM patches: {patch_counts} | total particles: {sum(patch_counts.values())}")
@@ -521,12 +526,22 @@ def main():
     # z only, holding x/y fixed: a genuine 1D test.
     foot_xy = _foot_world_pos(calf_link)[0, :2].detach().cpu().numpy().copy()
 
+    # Re-frame on the foot now that its position is known: this test is about a few
+    # centimetres of penetration at one point, so a body-centred shot would waste the frame.
+    if env.cam is not None:
+        env.cam.set_pose(
+            pos=(foot_xy[0] + 0.35, foot_xy[1] - 0.45, slab_top + 0.22),
+            lookat=(foot_xy[0], foot_xy[1], slab_top),
+        )
+
     # Let the mud reach gravitational equilibrium, then take the depth datum from where the
     # material actually ended up rather than the nominal slab top it was spawned at.
     n_mud_settle = max(0, round(args.mud_settle_s / env.dt))
     for _ in range(n_mud_settle):
         env.robot.control_dofs_position(env.bench_dof_pos.unsqueeze(0), env.motors_dof_idx)
         env.scene.step()
+        if env.cam is not None:
+            env.cam.render()
     if n_mud_settle:
         settled_top = _measure_mud_surface(env, foot_xy, args.surface_percentile)
         print(f"mud settled {args.mud_settle_s:.2f}s: surface {slab_top:.4f} -> {settled_top:.4f} m "
@@ -552,6 +567,8 @@ def main():
             )
             env.robot.control_dofs_position(full_target.unsqueeze(0), env.motors_dof_idx)
             env.scene.step()
+            if env.cam is not None:
+                env.cam.render()
         residual = abs((slab_top - (float(_foot_world_pos(calf_link)[0, 2]) - FOOT_SPHERE_RADIUS)) - depth_traj[0])
         print(f"settled: {n_settle} steps, residual depth error {residual * 1e3:.2f} mm")
 
@@ -627,10 +644,14 @@ def main():
         "substeps": env_cfg["substeps"],
         "metrics": metrics,
     }
-    (out_dir / "params.json").write_text(json.dumps(params, indent=2, default=str))
 
     if env.cam is not None:
-        env.cam.stop_recording(save_to_filename=str(out_dir / "rollout.mp4"), fps=round(1.0 / env.dt))
+        # fps = control rate, so the video plays at wall-clock speed
+        fps = round(1.0 / env.dt)
+        env.cam.stop_recording(save_to_filename=str(out_dir / "rollout.mp4"), fps=fps)
+        params["video"] = {"file": "rollout.mp4", "fps": fps, "includes_settle_phases": True}
+
+    (out_dir / "params.json").write_text(json.dumps(params, indent=2, default=str))
 
     print(f"report written to {out_dir}")
     for key, value in metrics.items():
