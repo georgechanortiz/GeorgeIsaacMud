@@ -4,7 +4,10 @@ Same policy and observation pipeline as scripts/eval.py -- the only difference i
 that the scene carries an MPM solver and the robot walks through a patch of
 elasto-plastic material instead of bare ground.
 
-    python scripts/eval_mpm.py -reporting -p logs/2026-08-01_13-52-45_phase2/model_500.pt
+    python scripts/eval_mpm.py -reporting -p logs/Policy_B/model_1499.pt
+    
+    
+    2026-08-01_13-52-45_phase2/model_500.pt
 """
 
 import argparse
@@ -235,6 +238,17 @@ def main():
     parser.add_argument("--phi-smooth", type=float, default=1.0, metavar="ALPHA", help="EMA weight on phi's e_t estimate: 1.0 = off, smaller = heavier filtering (0.1 keeps ~90%% of the previous estimate). Damps the step-to-step jitter that destabilises the gait out of distribution.")
     parser.add_argument("--phi-rate", type=float, default=None, metavar="HZ", help="Re-estimate the mud parameters at this rate instead of every control step, holding the value in between. The control loop runs at 50 Hz, so --phi-rate 10 refreshes phi once every 5 steps. Mud properties do not change at control rate, so a slow estimator is both more realistic and much less jittery.")
     parser.add_argument("--phi-clamp", action="store_true", help="Clamp phi's e_t estimate to the range the actor was trained on, read from the run's params/env.yaml.")
+    # --- soft-mud material sweep (defaults reproduce the committed config) ---
+    parser.add_argument("--yield-stress", type=float, default=600.0, metavar="PA", help="von Mises yield stress of the soft_mud layer (Pa).")
+    parser.add_argument("--soft-E", type=float, default=2e4, metavar="PA", help="Young's modulus of the soft_mud layer (Pa).")
+    parser.add_argument("--soft-nu", type=float, default=0.35, metavar="NU", help="Poisson ratio of the soft_mud layer. Saturated/undrained clay sits near 0.45; must stay < 0.5.")
+    parser.add_argument("--soft-rho", type=float, default=1500.0, metavar="KGM3", help="Density of the soft_mud layer (kg/m3).")
+    parser.add_argument("--seed", type=int, default=None, metavar="N", help="Jitter the spawn pose by a seeded offset. The rollout is otherwise fully deterministic (commands and heading are sampled from degenerate ranges), so repeats without this are bit-identical and carry no variance information.")
+    parser.add_argument("--spawn-jitter", type=float, default=0.03, metavar="M", help="Half-width of the uniform spawn offset in x and y applied when --seed is set.")
+    parser.add_argument("--soft-z", type=float, nargs=2, default=(0.06, 0.11), metavar=("LOW","HIGH"), help="Vertical extent of the soft_mud layer (m). Default 0.06-0.11 sits flush on the stiff base (which ends at 0.06); a thicker layer or a gap stops the foot reaching the firm base and the robot cannot push off.")
+    parser.add_argument("--out-root", type=str, default=None, metavar="DIR", help="Write reports under this directory instead of reports/.")
+    parser.add_argument("--tag", type=str, default=None, metavar="NAME", help="Use this as the report sub-directory name instead of the checkpoint's experiment name.")
+
     args = parser.parse_args()
 
     gs.init(backend=gs.cpu if args.cpu else gs.gpu, precision="32", logging_level="warning")
@@ -287,14 +301,14 @@ def main():
 
             {
                 "name": "soft_mud",
-                "material": "sand",  # thin top layer; yields and flows under a foot instead of resisting
-                "E": 2e4,                      # much softer than the base layer, so it deforms easily before yielding
-                "nu": 0.35,
-                "rho": 1500.0,
-                "friction_angle": 30.0,        # degrees
-                # "yield_stress": 600,
-                "patch_lower": (1.1, -0.38, 0.065),
-                "patch_upper": (4.55, 0.38, 0.15),
+                "material": "elasto_plastic",  # thin top layer; yields and flows under a foot instead of resisting
+                "E": args.soft_E,              # much softer than the base layer, so it deforms easily before yielding
+                "nu": args.soft_nu,
+                "rho": args.soft_rho,
+                # "friction_angle": 30.0,        # degrees
+                "yield_stress": args.yield_stress,
+                "patch_lower": (1.1, -0.38, args.soft_z[0]),
+                "patch_upper": (4.55, 0.38, args.soft_z[1]),
                 "color": (0.78, 0.62, 0.46),
             },
 
@@ -340,6 +354,14 @@ def main():
     spawn_x = min(p["patch_lower"][0] for p in patches) + 0.4
     _, by, bz = env_cfg["base_init_pos"]
     env_cfg["base_init_pos"] = [spawn_x, by, bz + slab_top]
+    if args.seed is not None:
+        # The rollout is otherwise deterministic, so repeats need a perturbation to carry any
+        # variance. Offsetting the spawn changes which part of the patch each foot strikes and
+        # the gait phase at contact, without altering the commanded task.
+        _rng = np.random.default_rng(args.seed)
+        _dx, _dy = _rng.uniform(-args.spawn_jitter, args.spawn_jitter, size=2)
+        env_cfg["base_init_pos"] = [spawn_x + float(_dx), by + float(_dy), bz + slab_top]
+        print(f"seed {args.seed}: spawn offset dx={_dx:+.4f} m dy={_dy:+.4f} m")
 
     env = Go2MPMEnv(
         num_envs=1,  # MPM state is not batched cheaply; keep this at 1
@@ -360,12 +382,20 @@ def main():
     reporter = None
     if args.reporting:
         reporter = Reporter(
-            experiment=ckpt_path.parent.parent.name,
+            experiment=args.tag or ckpt_path.parent.parent.name,
             params={
                 "policy": str(ckpt_path),
                 "run": ckpt_path.parent.name,
                 "scene": "mpm",
                 "mpm_cfg": mpm_cfg,
+                "soft_mud_sweep": {
+                    "yield_stress": args.yield_stress,
+                    "E": args.soft_E,
+                    "nu": args.soft_nu,
+                    "rho": args.soft_rho,
+                    "seed": args.seed,
+                    "soft_z": list(args.soft_z),
+                },
                 "mpm_particles": total_particles,
                 "mpm_particles_by_patch": patch_counts,
                 "num_envs": 1,
@@ -375,7 +405,7 @@ def main():
                 "command_cfg": command_cfg,
                 "obs_scales": obs_cfg["obs_scales"],
             },
-            reports_dir=REPO_ROOT / "reports",
+            reports_dir=Path(args.out_root) if args.out_root else REPO_ROOT / "reports",
         )
 
     run_rollout(env, policy, steps=args.steps if args.reporting else None, reporter=reporter)
