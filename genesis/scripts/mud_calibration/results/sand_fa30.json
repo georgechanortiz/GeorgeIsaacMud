@@ -1,0 +1,36 @@
+{
+ "name": "sand_fa30",
+ "cfg": {
+  "name": "sand_fa30",
+  "vx": 0.35,
+  "mud": {
+   "material": "sand",
+   "E": 20000.0,
+   "nu": 0.3,
+   "rho": 1500,
+   "friction_angle": 30
+  }
+ },
+ "steps": 450,
+ "window_s": 7.0,
+ "fell": false,
+ "wall_s": 123.61905241012573,
+ "speed": 0.19918480523462806,
+ "power_w": 56.823692321777344,
+ "front_hip_mean": 13.612441062927246,
+ "front_hip_p95": 30.31616973876953,
+ "front_thigh_mean": 12.422154426574707,
+ "front_thigh_p95": 23.823793411254883,
+ "front_calf_mean": 24.745332717895508,
+ "front_calf_p95": 55.81790542602539,
+ "rear_hip_mean": 15.207294464111328,
+ "rear_hip_p95": 31.3444881439209,
+ "rear_thigh_mean": 8.779422760009766,
+ "rear_thigh_p95": 17.53120994567871,
+ "rear_calf_mean": 18.75680160522461,
+ "rear_calf_p95": 44.423194885253906,
+ "stance_foot_z_p10": 0.031101590022444725,
+ "base_z": 0.41846768115248,
+ "mud_weight_frac": 0.10715830239405263,
+ "floor_weight_frac": 0.8992825791145471
+}

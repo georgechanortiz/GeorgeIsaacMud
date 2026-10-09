@@ -140,6 +140,13 @@ class Go2MPMEnv(Go2Env):
                 material = gs.materials.MPM.Elastic(E=patch["E"], nu=patch["nu"], rho=patch["rho"])
             elif patch["material"] == "sand":
                 material = gs.materials.MPM.Sand(E=patch["E"], nu=patch["nu"], rho=patch["rho"], friction_angle=patch["friction_angle"])
+            elif patch["material"] == "liquid":
+                # viscous=True gives a shear stress 2*mu*(F - R)F^T, with mu set by E and nu
+                material = gs.materials.MPM.Liquid(E=patch["E"], nu=patch["nu"], rho=patch["rho"], viscous=patch.get("viscous", True))
+            elif patch["material"] == "snow":
+                material = gs.materials.MPM.Snow(E=patch["E"], nu=patch["nu"], rho=patch["rho"])
+            elif patch["material"] != "elasto_plastic":
+                raise ValueError(f"patch '{patch.get('name')}': unknown MPM material {patch['material']!r}")
             else:
                 material = gs.materials.MPM.ElastoPlastic(
                     E=patch["E"],

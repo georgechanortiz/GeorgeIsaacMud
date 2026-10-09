@@ -9,6 +9,7 @@ logs/ is organised (go2_mud_flat, unitree_go2_flat_rma, ...), so reports for
 different policies never mix and repeated runs never collide.
 """
 
+import inspect
 import json
 import time
 from datetime import datetime
@@ -77,6 +78,7 @@ class Reporter:
         self._phi_values = []
         self._phi_fresh = []
         self._recording = False
+        self._streaming_video = False
         self._wall_sim_s = None  # (wall_s, sim_s), set by run_rollout via note_rollout_timing
 
     def record(self, env, policy=None):
@@ -114,10 +116,19 @@ class Reporter:
 
         if getattr(env, "cam", None) is not None:
             if not self._recording:
-                env.cam.start_recording()
+                # Genesis changed its recording API: newer versions take the filename and
+                # framerate here and capture frames by themselves as the scene steps; older
+                # ones take them in stop_recording and need an explicit render() per frame.
+                self._streaming_video = "save_to_filename" in inspect.signature(env.cam.start_recording).parameters
+                if self._streaming_video:
+                    # fps = control rate so the video plays at wall-clock speed
+                    env.cam.start_recording(save_to_filename=str(self.out_dir / "rollout.mp4"), fps=round(1.0 / env.dt))
+                else:
+                    env.cam.start_recording()
                 self._recording = True
             env.update_camera()  # follow the robot
-            env.cam.render()
+            if not self._streaming_video:
+                env.cam.render()
 
     def note_rollout_timing(self, wall_s, sim_s):
         """Record how long the rollout took in wall-clock time vs. simulated time.
@@ -159,7 +170,10 @@ class Reporter:
         # travelled. Accumulated from speed the same way the training metric is.
         speed = np.linalg.norm(lin[:, :2], axis=1)
         path_len = float((speed * env.dt).sum())
-        mass = np.asarray(env.robot.get_mass(), dtype=float).reshape(-1)[0]
+        mass = env.robot.get_mass()
+        if hasattr(mass, "detach"):  # torch tensor, possibly on the GPU
+            mass = mass.detach().cpu().numpy()
+        mass = np.asarray(mass, dtype=float).reshape(-1)[0]
         # E / (m g d), dimensionless. Undefined for a robot that never moved.
         weight_distance = float(mass) * 9.81 * path_len
         cot = energy / weight_distance if weight_distance > 0 else float("nan")
@@ -221,7 +235,10 @@ class Reporter:
         if self._recording:
             # fps = control rate so the video plays at wall-clock speed
             fps = round(1.0 / env.dt)
-            env.cam.stop_recording(save_to_filename=str(self.out_dir / "rollout.mp4"), fps=fps)
+            if self._streaming_video:
+                env.cam.stop_recording()
+            else:
+                env.cam.stop_recording(save_to_filename=str(self.out_dir / "rollout.mp4"), fps=fps)
             metrics["video_fps"] = fps
 
         payload = {"experiment": self.experiment}

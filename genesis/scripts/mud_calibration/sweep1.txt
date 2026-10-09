@@ -1,0 +1,12 @@
+ep_E2e4_y200|{"material":"elasto_plastic","E":2e4,"nu":0.35,"rho":1500,"yield_stress":200}
+ep_E2e4_y80|{"material":"elasto_plastic","E":2e4,"nu":0.35,"rho":1500,"yield_stress":80}
+ep_E1e5_y200|{"material":"elasto_plastic","E":1e5,"nu":0.35,"rho":1500,"yield_stress":200}
+ep_E1e5_y1500|{"material":"elasto_plastic","E":1e5,"nu":0.35,"rho":1500,"yield_stress":1500}
+ep_E5e3_y300|{"material":"elasto_plastic","E":5e3,"nu":0.35,"rho":1500,"yield_stress":300}
+sand_fa15|{"material":"sand","E":2e4,"nu":0.3,"rho":1500,"friction_angle":15}
+sand_fa30|{"material":"sand","E":2e4,"nu":0.3,"rho":1500,"friction_angle":30}
+liq_visc_E2e4|{"material":"liquid","E":2e4,"nu":0.35,"rho":1500,"viscous":true}
+liq_visc_E1e5|{"material":"liquid","E":1e5,"nu":0.35,"rho":1500,"viscous":true}
+liq_inv_E1e5|{"material":"liquid","E":1e5,"nu":0.35,"rho":1500,"viscous":false}
+snow_E2e4|{"material":"snow","E":2e4,"nu":0.35,"rho":1500}
+ep_E2e4_y600_cf01|{"material":"elasto_plastic","E":2e4,"nu":0.35,"rho":1500,"yield_stress":600,"coup_friction":0.1}

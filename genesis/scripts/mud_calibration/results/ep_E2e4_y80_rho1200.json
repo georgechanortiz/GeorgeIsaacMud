@@ -1,0 +1,36 @@
+{
+ "name": "ep_E2e4_y80_rho1200",
+ "cfg": {
+  "name": "ep_E2e4_y80_rho1200",
+  "vx": 0.35,
+  "mud": {
+   "material": "elasto_plastic",
+   "E": 20000.0,
+   "nu": 0.35,
+   "rho": 1200,
+   "yield_stress": 80
+  }
+ },
+ "steps": 436,
+ "window_s": 6.72,
+ "fell": false,
+ "wall_s": 116.65993523597717,
+ "speed": 0.3008530432402733,
+ "power_w": 54.43073272705078,
+ "front_hip_mean": 13.468863487243652,
+ "front_hip_p95": 30.044240951538086,
+ "front_thigh_mean": 11.061314582824707,
+ "front_thigh_p95": 22.91288185119629,
+ "front_calf_mean": 21.330163955688477,
+ "front_calf_p95": 44.473514556884766,
+ "rear_hip_mean": 14.09276008605957,
+ "rear_hip_p95": 29.820825576782227,
+ "rear_thigh_mean": 7.896892547607422,
+ "rear_thigh_p95": 16.7078800201416,
+ "rear_calf_mean": 17.206212997436523,
+ "rear_calf_p95": 43.572452545166016,
+ "stance_foot_z_p10": 0.03115513175725937,
+ "base_z": 0.41636415021050543,
+ "mud_weight_frac": 0.034522078749947435,
+ "floor_weight_frac": 0.968754130370983
+}

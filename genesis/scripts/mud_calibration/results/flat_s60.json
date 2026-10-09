@@ -1,0 +1,30 @@
+{
+ "name": "flat_s60",
+ "cfg": {
+  "name": "flat_s60",
+  "vx": 0.35,
+  "substeps": 60
+ },
+ "steps": 329,
+ "window_s": 4.58,
+ "fell": false,
+ "wall_s": 9.089184045791626,
+ "speed": 0.4435798655626035,
+ "power_w": 58.92217254638672,
+ "front_hip_mean": 12.086894989013672,
+ "front_hip_p95": 29.940187454223633,
+ "front_thigh_mean": 15.147747039794922,
+ "front_thigh_p95": 28.624256134033203,
+ "front_calf_mean": 16.093542098999023,
+ "front_calf_p95": 37.00062561035156,
+ "rear_hip_mean": 13.014223098754883,
+ "rear_hip_p95": 27.78345489501953,
+ "rear_thigh_mean": 9.580958366394043,
+ "rear_thigh_p95": 21.387083053588867,
+ "rear_calf_mean": 16.95926856994629,
+ "rear_calf_p95": 41.765018463134766,
+ "stance_foot_z_p10": 0.031110607087612152,
+ "base_z": 0.41307125575677794,
+ "mud_weight_frac": 0.0,
+ "floor_weight_frac": 1.008517093555751
+}

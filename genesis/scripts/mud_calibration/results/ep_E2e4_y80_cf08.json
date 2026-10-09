@@ -1,0 +1,37 @@
+{
+ "name": "ep_E2e4_y80_cf08",
+ "cfg": {
+  "name": "ep_E2e4_y80_cf08",
+  "vx": 0.35,
+  "mud": {
+   "material": "elasto_plastic",
+   "E": 20000.0,
+   "nu": 0.35,
+   "rho": 1500,
+   "yield_stress": 80,
+   "coup_friction": 0.8
+  }
+ },
+ "steps": 450,
+ "window_s": 7.0,
+ "fell": false,
+ "wall_s": 120.14908075332642,
+ "speed": 0.2642398766428232,
+ "power_w": 58.221778869628906,
+ "front_hip_mean": 13.385271072387695,
+ "front_hip_p95": 29.46084213256836,
+ "front_thigh_mean": 11.967413902282715,
+ "front_thigh_p95": 22.565494537353516,
+ "front_calf_mean": 23.57883071899414,
+ "front_calf_p95": 52.07835006713867,
+ "rear_hip_mean": 15.009243965148926,
+ "rear_hip_p95": 30.593477249145508,
+ "rear_thigh_mean": 8.441871643066406,
+ "rear_thigh_p95": 17.910236358642578,
+ "rear_calf_mean": 17.89974594116211,
+ "rear_calf_p95": 42.93444061279297,
+ "stance_foot_z_p10": 0.03112058714032173,
+ "base_z": 0.41650515445641106,
+ "mud_weight_frac": 0.0720928865383951,
+ "floor_weight_frac": 0.9318171191436878
+}

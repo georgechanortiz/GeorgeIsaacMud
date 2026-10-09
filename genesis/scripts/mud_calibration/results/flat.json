@@ -1,0 +1,29 @@
+{
+ "name": "flat",
+ "cfg": {
+  "name": "flat",
+  "vx": 0.35
+ },
+ "steps": 346,
+ "window_s": 4.92,
+ "fell": false,
+ "wall_s": 1.7327079772949219,
+ "speed": 0.41100206329085964,
+ "power_w": 50.25996398925781,
+ "front_hip_mean": 12.734962463378906,
+ "front_hip_p95": 30.865901947021484,
+ "front_thigh_mean": 15.32120132446289,
+ "front_thigh_p95": 28.352779388427734,
+ "front_calf_mean": 15.817573547363281,
+ "front_calf_p95": 37.590553283691406,
+ "rear_hip_mean": 13.027188301086426,
+ "rear_hip_p95": 27.99226951599121,
+ "rear_thigh_mean": 8.904603004455566,
+ "rear_thigh_p95": 20.48846435546875,
+ "rear_calf_mean": 16.7853946685791,
+ "rear_calf_p95": 41.67837905883789,
+ "stance_foot_z_p10": 0.03109496831893921,
+ "base_z": 0.4134023555410587,
+ "mud_weight_frac": 0.0,
+ "floor_weight_frac": 1.017147406171961
+}

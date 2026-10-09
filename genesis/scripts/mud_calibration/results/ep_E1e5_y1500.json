@@ -1,0 +1,36 @@
+{
+ "name": "ep_E1e5_y1500",
+ "cfg": {
+  "name": "ep_E1e5_y1500",
+  "vx": 0.35,
+  "mud": {
+   "material": "elasto_plastic",
+   "E": 100000.0,
+   "nu": 0.35,
+   "rho": 1500,
+   "yield_stress": 1500
+  }
+ },
+ "steps": 450,
+ "window_s": 7.0,
+ "fell": false,
+ "wall_s": 120.51026129722595,
+ "speed": 0.07415373622572848,
+ "power_w": 24.795759201049805,
+ "front_hip_mean": 12.544681549072266,
+ "front_hip_p95": 28.603431701660156,
+ "front_thigh_mean": 11.274739265441895,
+ "front_thigh_p95": 25.30435562133789,
+ "front_calf_mean": 25.57935333251953,
+ "front_calf_p95": 56.092041015625,
+ "rear_hip_mean": 13.648091316223145,
+ "rear_hip_p95": 30.36044692993164,
+ "rear_thigh_mean": 10.392556190490723,
+ "rear_thigh_p95": 18.311748504638672,
+ "rear_calf_mean": 18.97926902770996,
+ "rear_calf_p95": 48.71853256225586,
+ "stance_foot_z_p10": 0.03109513781964779,
+ "base_z": 0.42157609607492175,
+ "mud_weight_frac": 0.047231858843449805,
+ "floor_weight_frac": 0.9547122358413441
+}

@@ -1,0 +1,36 @@
+{
+ "name": "liq_visc_E2e4",
+ "cfg": {
+  "name": "liq_visc_E2e4",
+  "vx": 0.35,
+  "mud": {
+   "material": "liquid",
+   "E": 20000.0,
+   "nu": 0.35,
+   "rho": 1500,
+   "viscous": true
+  }
+ },
+ "steps": 423,
+ "window_s": 6.46,
+ "fell": false,
+ "wall_s": 116.05171751976013,
+ "speed": 0.3116447011429828,
+ "power_w": 55.432579040527344,
+ "front_hip_mean": 13.507804870605469,
+ "front_hip_p95": 30.30954933166504,
+ "front_thigh_mean": 10.862504005432129,
+ "front_thigh_p95": 22.611806869506836,
+ "front_calf_mean": 21.176258087158203,
+ "front_calf_p95": 46.224998474121094,
+ "rear_hip_mean": 14.114581108093262,
+ "rear_hip_p95": 29.935771942138672,
+ "rear_thigh_mean": 7.5027594566345215,
+ "rear_thigh_p95": 16.274089813232422,
+ "rear_calf_mean": 17.15888023376465,
+ "rear_calf_p95": 43.77211380004883,
+ "stance_foot_z_p10": 0.03116188757121563,
+ "base_z": 0.41677954571534975,
+ "mud_weight_frac": 0.05141490871309745,
+ "floor_weight_frac": 0.9514577218957816
+}

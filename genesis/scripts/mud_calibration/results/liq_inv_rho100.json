@@ -1,0 +1,36 @@
+{
+ "name": "liq_inv_rho100",
+ "cfg": {
+  "name": "liq_inv_rho100",
+  "vx": 0.35,
+  "mud": {
+   "material": "liquid",
+   "E": 100000.0,
+   "nu": 0.35,
+   "rho": 100,
+   "viscous": false
+  }
+ },
+ "steps": 338,
+ "window_s": 4.76,
+ "fell": false,
+ "wall_s": 90.20750069618225,
+ "speed": 0.42331571529517653,
+ "power_w": 57.964290618896484,
+ "front_hip_mean": 11.820396423339844,
+ "front_hip_p95": 29.446256637573242,
+ "front_thigh_mean": 15.063626289367676,
+ "front_thigh_p95": 28.021270751953125,
+ "front_calf_mean": 16.341312408447266,
+ "front_calf_p95": 38.153160095214844,
+ "rear_hip_mean": 13.158411979675293,
+ "rear_hip_p95": 28.289085388183594,
+ "rear_thigh_mean": 9.486649513244629,
+ "rear_thigh_p95": 20.21109390258789,
+ "rear_calf_mean": 16.919113159179688,
+ "rear_calf_p95": 40.93840789794922,
+ "stance_foot_z_p10": 0.031092315912246704,
+ "base_z": 0.4136236241134275,
+ "mud_weight_frac": 0.003993571708587756,
+ "floor_weight_frac": 0.9956279535339431
+}

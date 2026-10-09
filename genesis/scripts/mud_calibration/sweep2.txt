@@ -1,0 +1,8 @@
+liq_visc_E3e5|{"material":"liquid","E":3e5,"nu":0.35,"rho":1500,"viscous":true}
+liq_visc_E1e6|{"material":"liquid","E":1e6,"nu":0.35,"rho":1500,"viscous":true}
+liq_visc_E1e5_rho1800|{"material":"liquid","E":1e5,"nu":0.35,"rho":1800,"viscous":true}
+liq_visc_E1e5_rho1200|{"material":"liquid","E":1e5,"nu":0.35,"rho":1200,"viscous":true}
+liq_visc_E1e5_cf08|{"material":"liquid","E":1e5,"nu":0.35,"rho":1500,"viscous":true,"coup_friction":0.8}
+ep_E2e4_y30|{"material":"elasto_plastic","E":2e4,"nu":0.35,"rho":1500,"yield_stress":30}
+ep_E2e4_y80_rho1200|{"material":"elasto_plastic","E":2e4,"nu":0.35,"rho":1200,"yield_stress":80}
+ep_E2e4_y80_cf08|{"material":"elasto_plastic","E":2e4,"nu":0.35,"rho":1500,"yield_stress":80,"coup_friction":0.8}

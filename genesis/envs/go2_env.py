@@ -12,6 +12,14 @@ ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 GO2_URDF = str(ASSETS_DIR / "go2" / "urdf" / "go2.urdf")
 
 
+def resolve_urdf(path):
+    """env_cfg["urdf"] may be absolute or relative to assets/; unset means the Go2."""
+    if path is None:
+        return GO2_URDF
+    path = Path(path)
+    return str(path if path.is_absolute() else ASSETS_DIR / path)
+
+
 def gs_rand(lower, upper, batch_shape):
     assert lower.shape == upper.shape
     return (upper - lower) * torch.rand(size=(*batch_shape, *lower.shape), dtype=gs.tc_float, device=gs.device) + lower
@@ -42,8 +50,47 @@ class Go2Env:
         self.obs_scales: dict[str, float] = obs_cfg["obs_scales"]
         self.reward_scales: dict[str, float] = reward_cfg["reward_scales"]
 
+        # Per-joint actuator settings. Each of kp/kd/effort_limit/velocity_limit/armature may be a
+        # scalar or a dict keyed by joint name, so robots whose actuator groups differ (the A2's
+        # calves are stiffer than its hips and thighs) can be ported from IsaacLab without collapsing
+        # them to a single value.
+        joint_names = self.env_cfg["joint_names"]
+        self._kp = self._per_joint(self.env_cfg["kp"], joint_names)
+        self._kd = self._per_joint(self.env_cfg["kd"], joint_names)
+        self._effort_limit = self._per_joint(self.env_cfg.get("effort_limit"), joint_names)
+        # IsaacLab's DCMotor caps torque along a torque-speed line, not at a fixed effort:
+        # tau_max(v) = saturation * (1 - v / velocity_limit), clipped to +/- effort_limit.
+        # Genesis' PD only has a static force range, so with this set the range is recomputed
+        # from the measured joint velocity once per control step (see _apply_dc_motor_limits).
+        self._velocity_limit = self._per_joint(self.env_cfg.get("velocity_limit"), joint_names)
+        self._saturation_effort = self._per_joint(
+            self.env_cfg.get("saturation_effort", self.env_cfg.get("effort_limit")), joint_names
+        )
+        self._dc_motor = self._velocity_limit is not None
+        if self._dc_motor and (self._effort_limit is None or self._saturation_effort is None):
+            raise ValueError("velocity_limit (DCMotor torque-speed cap) needs effort_limit as well")
+        armature = self.env_cfg.get("armature")
+
+        # Physics steps per control step, IsaacLab's `decimation`. The scene is stepped this many
+        # times per env.step at dt / decimation, each step carrying substeps / decimation solver
+        # substeps, so the total substep count (and hence MPM/SPH stability) is unchanged. It only
+        # matters with the DCMotor cap: the torque-speed envelope is refreshed before every
+        # physics step, at the rate IsaacLab evaluated it, instead of once per control step.
+        self.decimation = int(self.env_cfg.get("decimation", 1))
+        substeps = self.env_cfg.get("substeps", 2)
+        if substeps % self.decimation:
+            raise ValueError(f"substeps ({substeps}) must be a multiple of decimation ({self.decimation})")
+
         # create scene
-        self.scene = gs.Scene(**self._scene_kwargs(show_viewer))
+        scene_kwargs = self._scene_kwargs(show_viewer)
+        if self._dc_motor:
+            # The torque-speed cap differs per env (it depends on each env's joint velocity), so
+            # force_range has to be batched. Set here rather than in _scene_kwargs so subclasses
+            # that replace rigid_options outright still get it.
+            rigid_options = scene_kwargs.get("rigid_options") or gs.options.RigidOptions()
+            rigid_options.batch_dofs_info = True
+            scene_kwargs["rigid_options"] = rigid_options
+        self.scene = gs.Scene(**scene_kwargs)
 
         # add plain
         self.plane = self.scene.add_entity(
@@ -57,9 +104,12 @@ class Go2Env:
         # add robot
         self.robot = self.scene.add_entity(
             gs.morphs.URDF(
-                file=GO2_URDF,
+                file=resolve_urdf(self.env_cfg.get("urdf")),
                 pos=self.env_cfg["base_init_pos"],
                 quat=self.env_cfg["base_init_quat"],
+                # Genesis gives every joint 0.1 kg*m^2 of rotor inertia unless told otherwise.
+                # A scalar armature is applied here; a per-joint dict is set after build.
+                **({"default_armature": armature} if isinstance(armature, (int, float)) else {}),
             ),
             material=self._rigid_material(),
         )
@@ -90,17 +140,23 @@ class Go2Env:
         )
         self.actions_dof_idx = torch.argsort(self.motors_dof_idx)
 
-        # PD control parameters
-        self.robot.set_dofs_kp([self.env_cfg["kp"]] * self.num_actions, self.motors_dof_idx)
-        self.robot.set_dofs_kv([self.env_cfg["kd"]] * self.num_actions, self.motors_dof_idx)
+        # PD control parameters, in joint_names order like motors_dof_idx
+        self.robot.set_dofs_kp(self._kp, self.motors_dof_idx)
+        self.robot.set_dofs_kv(self._kd, self.motors_dof_idx)
+        if armature is not None:
+            self.robot.set_dofs_armature(self._effective_armature(armature, joint_names), self.motors_dof_idx)
 
         # Without a force range the PD controller can deliver torques the real actuator
         # (and the training sim's actuator model) could never produce.
-        effort_limit = self.env_cfg.get("effort_limit")
-        if effort_limit is not None:
+        if self._effort_limit is not None:
             self.robot.set_dofs_force_range(
-                [-effort_limit] * self.num_actions, [effort_limit] * self.num_actions, self.motors_dof_idx
+                [-e for e in self._effort_limit], self._effort_limit, self.motors_dof_idx
             )
+        if self._dc_motor:
+            as_t = lambda v: torch.tensor(v, dtype=gs.tc_float, device=gs.device)
+            self._effort_limit_t = as_t(self._effort_limit)
+            self._saturation_effort_t = as_t(self._saturation_effort)
+            self._velocity_limit_t = as_t(self._velocity_limit)
 
         # Define global gravity direction vector
         self.global_gravity = torch.tensor([0.0, 0.0, -1.0], dtype=gs.tc_float, device=gs.device)
@@ -240,13 +296,67 @@ class Go2Env:
 
         self.reset()
 
+    @staticmethod
+    def _per_joint(value, joint_names):
+        """Expand a scalar or a {joint_name: value} dict into a list in joint_names order."""
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return [float(value[name]) for name in joint_names]
+        return [float(value)] * len(joint_names)
+
+    def _effective_armature(self, armature, joint_names):
+        """Armature to hand Genesis so the PD-driven joint behaves like the trained one.
+
+        Genesis' default integrator (approximate_implicitfast) treats the PD's damping term
+        implicitly: for every position-controlled dof it adds kd * substep_dt to the diagonal
+        of the mass matrix (forward_dynamics.func_compute_mass_matrix). IsaacLab's DCMotor
+        applies the same PD as an explicit effort, which adds no inertia. At 200 Hz physics
+        that is +0.010 kg*m^2 on the A2's hips/thighs and +0.0125 on its calves, against a
+        trained armature of 0.03, so the joints respond noticeably slower than in training.
+        With env_cfg["compensate_implicit_pd"] set, the armature is reduced by exactly that
+        amount, which makes the diagonal match the trained model again. The correction
+        shrinks with the substep, so the 60-substep MPM scenes barely change.
+        """
+        arm = self._per_joint(armature, joint_names)
+        if not self.env_cfg.get("compensate_implicit_pd", False):
+            return arm
+        h = self.dt / self.env_cfg.get("substeps", 2)
+        out = []
+        for name, a, kd in zip(joint_names, arm, self._kd):
+            eff = a - kd * h
+            if eff < 0.0:
+                print(
+                    f"[WARN] {name}: armature {a} is smaller than the implicit PD term kd*dt = {kd * h:.4f}; "
+                    "clamping to 0. Raise substeps to replay this actuator faithfully."
+                )
+                eff = 0.0
+            out.append(eff)
+        return out
+
+    def _apply_dc_motor_limits(self):
+        """Set this control step's force range from IsaacLab's DCMotor torque-speed curve.
+
+        Mirrors isaaclab.actuators.DCMotor._clip_effort. IsaacLab re-evaluates it every physics
+        step from the instantaneous joint velocity; this is called before each of the
+        `decimation` physics steps of a control step and held across that step's solver
+        substeps. With decimation 1 it is only refreshed at the control rate, which misses the
+        cap during fast swings (see scripts/tune_a2_pd.py).
+        """
+        ratio = self.robot.get_dofs_velocity(self.motors_dof_idx) / self._velocity_limit_t
+        upper = torch.clip(self._saturation_effort_t * (1.0 - ratio), min=torch.zeros_like(ratio))
+        upper = torch.minimum(upper, self._effort_limit_t)
+        lower = torch.clip(self._saturation_effort_t * (-1.0 - ratio), max=torch.zeros_like(ratio))
+        lower = torch.maximum(lower, -self._effort_limit_t)
+        self.robot.set_dofs_force_range(lower, upper, self.motors_dof_idx)
+
     # ------------ scene hooks (overridden by coupled-sim subclasses) ----------------
     def _scene_kwargs(self, show_viewer):
         """Constructor kwargs for gs.Scene. Override to add mpm_options / sph_options."""
         return dict(
             sim_options=gs.options.SimOptions(
-                dt=self.dt,
-                substeps=self.env_cfg.get("substeps", 2),
+                dt=self.dt / self.decimation,
+                substeps=self.env_cfg.get("substeps", 2) // self.decimation,
             ),
             rigid_options=gs.options.RigidOptions(
                 enable_self_collision=False,
@@ -324,7 +434,10 @@ class Go2Env:
         exec_actions = self.last_actions if self.simulate_action_latency else self.actions
         target_dof_pos = exec_actions * self.action_scale + self.default_dof_pos
         self.robot.control_dofs_position(target_dof_pos[:, self.actions_dof_idx], slice(6, 18))
-        self.scene.step()
+        for _ in range(self.decimation):
+            if self._dc_motor:
+                self._apply_dc_motor_limits()
+            self.scene.step()
 
         # update buffers
         self.episode_length_buf += 1

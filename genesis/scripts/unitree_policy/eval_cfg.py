@@ -41,6 +41,10 @@ DEFAULT_POLICY = "logs/go2_mud_flat/2026-07-15_17-09-30/model_4999.pt"
 CONFIG_BY_EXPERIMENT = {
     "unitree_go2_flat_rma": "go2_rma",
     "unitree_go2_flat_privobs": "go2_mud_flat",
+    # Unitree A2 runs from a2_mud/logs/rsl_rl, which share one robot and actuator setup.
+    "a2_flat": "a2_flat",
+    "a2_flat_erft": "a2_flat",
+    "a2_flat_nomud": "a2_flat",
 }
 
 # RMA / privileged-obs actors are custom rsl-rl models living in the mud repo. rsl-rl
@@ -154,6 +158,61 @@ def _obs_terms(log_dir, group_name):
     return [name for name, term in group.items() if isinstance(term, dict) and term.get("func")]
 
 
+def _migrate_legacy_agent_cfg(train_cfg):
+    """Rewrite a pre-5.0 rsl-rl agent cfg (one `policy: ActorCritic` block) as 5.x actor/critic cfgs.
+
+    The a2_mud runs were trained on an rsl-rl that still bundled actor and critic into a single
+    ActorCritic module; rsl-rl >= 5 builds them as two MLPModels and refuses the old key. Only the
+    plain MLP ActorCritic is translated -- anything else (recurrent, custom RMA classes) is left
+    alone so it fails loudly rather than loading the wrong architecture.
+    """
+    policy = train_cfg.get("policy")
+    if "actor" in train_cfg or not isinstance(policy, dict) or policy.get("class_name") != "ActorCritic":
+        return train_cfg
+    train_cfg = dict(train_cfg)
+    train_cfg.pop("policy")
+    activation = policy.get("activation", "elu")
+    train_cfg["actor"] = {
+        "class_name": "MLPModel",
+        "hidden_dims": list(policy["actor_hidden_dims"]),
+        "activation": activation,
+        "obs_normalization": bool(policy.get("actor_obs_normalization", False)),
+        "distribution_cfg": {
+            "class_name": "GaussianDistribution",
+            "init_std": float(policy.get("init_noise_std", 1.0)),
+            "std_type": policy.get("noise_std_type", "scalar"),
+        },
+    }
+    train_cfg["critic"] = {
+        "class_name": "MLPModel",
+        "hidden_dims": list(policy["critic_hidden_dims"]),
+        "activation": activation,
+        "obs_normalization": bool(policy.get("critic_obs_normalization", False)),
+    }
+    return train_cfg
+
+
+def _migrate_legacy_checkpoint(loaded):
+    """Map a pre-5.0 ActorCritic checkpoint onto the 5.x actor MLPModel's state dict.
+
+    Old: model_state_dict = {actor.N.*, critic.N.*, std | log_std, [actor_obs_normalizer.*]}.
+    New: actor_state_dict = {mlp.N.*, distribution.std_param, [obs_normalizer.*]}.
+    Checkpoints already in the new layout pass through untouched.
+    """
+    if "actor_state_dict" in loaded or "model_state_dict" not in loaded:
+        return loaded
+    actor = {}
+    for key, value in loaded["model_state_dict"].items():
+        if key.startswith("actor."):
+            actor["mlp." + key[len("actor."):]] = value
+        elif key in ("std", "log_std"):
+            actor["distribution.std_param"] = value
+        elif key.startswith("actor_obs_normalizer."):
+            actor["obs_normalizer." + key[len("actor_obs_normalizer."):]] = value
+    print("[INFO] converted a pre-5.0 rsl-rl ActorCritic checkpoint to the 5.x actor layout.")
+    return {**loaded, "actor_state_dict": actor}
+
+
 def load_cfgs(log_dir, config=None):
     """Assemble (env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg) for a run.
 
@@ -182,7 +241,7 @@ def load_cfgs(log_dir, config=None):
     if not agent_yaml.exists():
         return env_cfg, obs_cfg, reward_cfg, command_cfg, mod.get_train_cfg(log_dir.name)
 
-    train_cfg = yaml.unsafe_load(agent_yaml.read_text())
+    train_cfg = _migrate_legacy_agent_cfg(yaml.unsafe_load(agent_yaml.read_text()))
     train_cfg["logger"] = "tensorboard"  # never re-init the training run's wandb at eval
     train_cfg["resume"] = False
 
@@ -373,7 +432,8 @@ def load_policy(env, ckpt_path, train_cfg, *, phi_smooth=1.0, phi_clamp=False, p
     on the returned callable, not on how it is assembled.
     """
     runner = OnPolicyRunner(env, train_cfg, str(ckpt_path.parent), device=gs.device)
-    runner.load(str(ckpt_path), load_cfg={"actor": True})
+    loaded = _migrate_legacy_checkpoint(torch.load(str(ckpt_path), weights_only=False, map_location=gs.device))
+    runner.alg.load(loaded, {"actor": True}, True)
     policy = runner.get_inference_policy(device=gs.device)
 
     # RMA / privileged-obs actors can source their latent either from the privileged

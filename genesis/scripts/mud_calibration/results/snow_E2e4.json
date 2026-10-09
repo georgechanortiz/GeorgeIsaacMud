@@ -1,0 +1,35 @@
+{
+ "name": "snow_E2e4",
+ "cfg": {
+  "name": "snow_E2e4",
+  "vx": 0.35,
+  "mud": {
+   "material": "snow",
+   "E": 20000.0,
+   "nu": 0.35,
+   "rho": 1500
+  }
+ },
+ "steps": 450,
+ "window_s": 7.0,
+ "fell": false,
+ "wall_s": 123.26291823387146,
+ "speed": 0.19138019476351995,
+ "power_w": 54.50634002685547,
+ "front_hip_mean": 13.441116333007812,
+ "front_hip_p95": 30.23953628540039,
+ "front_thigh_mean": 12.090982437133789,
+ "front_thigh_p95": 24.816946029663086,
+ "front_calf_mean": 24.42741584777832,
+ "front_calf_p95": 55.17828369140625,
+ "rear_hip_mean": 14.816113471984863,
+ "rear_hip_p95": 31.08306312561035,
+ "rear_thigh_mean": 9.31389331817627,
+ "rear_thigh_p95": 18.158449172973633,
+ "rear_calf_mean": 18.358131408691406,
+ "rear_calf_p95": 46.464229583740234,
+ "stance_foot_z_p10": 0.031093716621398926,
+ "base_z": 0.4187391442911966,
+ "mud_weight_frac": 0.078296044870239,
+ "floor_weight_frac": 0.9266591426719827
+}
