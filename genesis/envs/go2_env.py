@@ -30,6 +30,20 @@ def wrap_to_pi(angle):
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
+def dc_motor_torque_limits(joint_vel, saturation_effort, effort_limit, velocity_limit):
+    """(lower, upper) torque bounds of IsaacLab's DCMotor at joint velocity `joint_vel`.
+
+    Mirrors isaaclab.actuators.DCMotor._clip_effort: available torque falls off along the
+    torque-speed line saturation * (1 -/+ v / velocity_limit), clipped to +/- effort_limit.
+    """
+    ratio = joint_vel / velocity_limit
+    upper = torch.clip(saturation_effort * (1.0 - ratio), min=torch.zeros_like(ratio))
+    upper = torch.minimum(upper, effort_limit)
+    lower = torch.clip(saturation_effort * (-1.0 - ratio), max=torch.zeros_like(ratio))
+    lower = torch.maximum(lower, -effort_limit)
+    return lower, upper
+
+
 class Go2Env:
     def __init__(self, num_envs, env_cfg, obs_cfg, reward_cfg, command_cfg, show_viewer=False, record=False):
         self.num_envs: int = num_envs
@@ -337,17 +351,17 @@ class Go2Env:
     def _apply_dc_motor_limits(self):
         """Set this control step's force range from IsaacLab's DCMotor torque-speed curve.
 
-        Mirrors isaaclab.actuators.DCMotor._clip_effort. IsaacLab re-evaluates it every physics
-        step from the instantaneous joint velocity; this is called before each of the
-        `decimation` physics steps of a control step and held across that step's solver
-        substeps. With decimation 1 it is only refreshed at the control rate, which misses the
-        cap during fast swings (see scripts/tune_a2_pd.py).
+        IsaacLab re-evaluates it every physics step from the instantaneous joint velocity;
+        this is called before each of the `decimation` physics steps of a control step and
+        held across that step's solver substeps. With decimation 1 it is only refreshed at the
+        control rate, which misses the cap during fast swings (see scripts/tune_a2_pd.py).
         """
-        ratio = self.robot.get_dofs_velocity(self.motors_dof_idx) / self._velocity_limit_t
-        upper = torch.clip(self._saturation_effort_t * (1.0 - ratio), min=torch.zeros_like(ratio))
-        upper = torch.minimum(upper, self._effort_limit_t)
-        lower = torch.clip(self._saturation_effort_t * (-1.0 - ratio), max=torch.zeros_like(ratio))
-        lower = torch.maximum(lower, -self._effort_limit_t)
+        lower, upper = dc_motor_torque_limits(
+            self.robot.get_dofs_velocity(self.motors_dof_idx),
+            self._saturation_effort_t,
+            self._effort_limit_t,
+            self._velocity_limit_t,
+        )
         self.robot.set_dofs_force_range(lower, upper, self.motors_dof_idx)
 
     # ------------ scene hooks (overridden by coupled-sim subclasses) ----------------

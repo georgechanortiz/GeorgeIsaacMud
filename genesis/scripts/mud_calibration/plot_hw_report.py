@@ -29,20 +29,19 @@ usage: python scripts/mud_calibration/plot_hw_report.py <npz_dir> [out_dir]
 
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
-from scripts.unitree_policy.reporting import Reporter  # noqa: E402
+from configs.a2_flat import JOINT_NAMES  # noqa: E402  (hardware motor order is the same)
+from scripts.mud_calibration.metrics import walking_span  # noqa: E402
+from scripts.unitree_policy import plots  # noqa: E402
 
-# A2 URDF geometry. Hardware motor order is FR, FL, RR, RL, each (hip, thigh, calf), the same
-# order as configs/a2_flat.py's joint_names.
-HIP_X, HIP_Y, THIGH_Y, L_THIGH, L_CALF = 0.25944, 0.075113, 0.12779, 0.275, 0.275
+# A2 URDF geometry. Hardware motor order is FR, FL, RR, RL, each (hip, thigh, calf).
+THIGH_Y, L_THIGH, L_CALF = 0.12779, 0.275, 0.275  # hip-to-thigh offset, link lengths (m)
 LEGS = {"FR": (+1, -1), "FL": (+1, +1), "RR": (-1, -1), "RL": (-1, +1)}  # (front/rear, left/right) signs
 MOTOR_SLICE = {"FR": slice(0, 3), "FL": slice(3, 6), "RR": slice(6, 9), "RL": slice(9, 12)}
-JOINT_NAMES = [f"{leg}_{part}_joint" for leg in ("FR", "FL", "RR", "RL") for part in ("hip", "thigh", "calf")]
 PANEL_ORDER = ("FL", "RL", "FR", "RR")  # same panel layout as the sim reports (Genesis link order)
 CONTROL_DT = 0.02
 
@@ -102,10 +101,8 @@ def foot_forces(d):
 
 def walking_window(d, lead_s=0.5):
     """Time span from just before the walk starts to when it stops, on the lowstate clock."""
-    t0 = d["ls_t"][0]
-    speed = np.linalg.norm(d["vel"][:, :2], axis=1)
-    st = d["sm_t"][speed > 0.15] - t0
-    return st.min() - lead_s, st.max()
+    start, end = walking_span(d)
+    return start - lead_s, end
 
 
 def bin_50hz(t, x):
@@ -132,9 +129,8 @@ def main():
         _, tau = bin_50hz(t[m] - lo, sub["tau"])
         out_dir = out_root / f.stem
         out_dir.mkdir(parents=True, exist_ok=True)
-        plotter = SimpleNamespace(out_dir=out_dir)
-        Reporter._plot_foot_forces(plotter, tb, ff, names)
-        Reporter._plot_torques(plotter, tb, tau, JOINT_NAMES)
+        plots.plot_foot_forces(out_dir, tb, ff, names)
+        plots.plot_torques(out_dir, tb, tau, JOINT_NAMES)
         walk = tb > 1.0  # skip the lead-in and first strides
         print(f"{f.stem}: {tb[-1]:.1f} s, mean total F_z {ff[walk, :, 2].sum(1).mean():.0f} N, "
               f"peak foot F_z {ff[walk, :, 2].max():.0f} N, mean F_z per foot "

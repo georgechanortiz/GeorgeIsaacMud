@@ -12,7 +12,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "reports" / "Workshop sweep"
-PY = "/home/rml/anaconda3/envs/genesis/bin/python"
+PY = sys.executable  # the interpreter running this sweep, so the evals use the same env
 
 POLICIES = [("Baseline", "logs/Baseline/model_4999.pt"),
             ("Policy_A", "logs/Policy_A/model_4999.pt"),

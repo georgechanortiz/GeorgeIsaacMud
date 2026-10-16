@@ -29,12 +29,13 @@ from rsl_rl.runners import OnPolicyRunner
 
 import genesis as gs
 
-__all__ = ["DEFAULT_CONFIG", "DEFAULT_POLICY", "REPO_ROOT", "load_cfgs", "load_policy", "resolve_policy"]
+__all__ = ["DEFAULT_A2_POLICY", "DEFAULT_CONFIG", "DEFAULT_POLICY", "REPO_ROOT", "load_cfgs", "load_policy", "resolve_policy"]
 
 # Env config used when a run has no cfgs.pkl of its own (i.e. anything trained outside
 # this repo). Change here rather than per-script so all three entry points agree.
 DEFAULT_CONFIG = "go2_mud_flat"
 DEFAULT_POLICY = "logs/go2_mud_flat/2026-07-15_17-09-30/model_4999.pt"
+DEFAULT_A2_POLICY = "Policies/a2_flat/2026-10-08_21-07-46/model_4999.pt"
 
 # Genesis-side dynamics differ per experiment (base height, hip defaults), so map the
 # experiment directory -- logs/<experiment>/<run>/model_*.pt -- to a configs/ module.
@@ -396,7 +397,7 @@ def stabilise_adaptation(model, bounds=(None, None), smooth=1.0, hold_steps=1, d
     Always wraps ``model.adapt`` (even with every damping mechanism off) so that
     ``model.last_e_t`` (the value actually fed to the actor) and ``model.last_e_t_fresh``
     (whether this step recomputed it or reused the held one) are available for reporting
-    -- see Reporter._plot_phi in reporting.py. With no flags set this is a pass-through:
+    -- see plot_phi in plots.py. With no flags set this is a pass-through:
     every step is fresh and last_e_t equals the raw estimate.
     """
     lo, hi = bounds

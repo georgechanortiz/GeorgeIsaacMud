@@ -28,3 +28,6 @@ not ranked.
 `plot_hw_report.py <npz_dir>` draws each hardware run as `reports/hardware_bags/<run>/foot_forces.png`
 and `torques_by_leg.png`, in the sim reports' format. The bags have no foot-force data, so foot
 forces are estimated from joint torques and are valid in stance only (see the script's docstring).
+
+`metrics.py` holds what steps 2 and 3 share: the joint-group torque/power metrics and the
+walking-window detection. Bag decoding lives in `scripts/hardware/bags.py`.

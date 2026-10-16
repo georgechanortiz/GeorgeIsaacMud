@@ -1,12 +1,7 @@
-"""Shared policy-loading code for the Go2 eval entry points."""
+"""Shared code for the eval entry points.
 
-from scripts.unitree_policy.eval_cfg import (
-    DEFAULT_CONFIG,
-    DEFAULT_POLICY,
-    REPO_ROOT,
-    load_cfgs,
-    load_policy,
-    resolve_policy,
-)
-
-__all__ = ["DEFAULT_CONFIG", "DEFAULT_POLICY", "REPO_ROOT", "load_cfgs", "load_policy", "resolve_policy"]
+    eval_cfg   resolve a checkpoint, rebuild its env/train configs, load the policy
+    cli        command-line flags and setup steps every eval script shares
+    reporting  Reporter (per-step recording, metrics, params.json) and run_rollout
+    plots      report figures and their style
+"""

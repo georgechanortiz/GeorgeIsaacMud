@@ -10,15 +10,16 @@ penetration test: the same methodology real MPM/CPT validation studies use (a pr
 pushed into a chamber sample at constant rate, measuring resistance vs. depth), applied
 to an actual robot foot instead of a bare cone.
 
-Standalone by design: it does not subclass Go2Env/Go2MPMEnv from envs/go2_env.py or
-scripts/eval_mpm.py. Those are built around a floating-base robot driven by a trained
-locomotion policy's 12-dof position actions each control step, with a full observation/
-reward/command/termination pipeline behind them -- none of which applies to a bench test
-with a welded base, no policy, and one leg under direct IK control. Reusing them would
-mean fighting that machinery more than it would save; this script owns its own minimal
-scene setup instead. The mud patches/materials/walls intentionally mirror eval_mpm.py's
-build_mpm_cfg by hand (see MPM_CFG below) so the two scripts test the same mud -- if you
-change one, change the other.
+It does not subclass Go2Env/Go2MPMEnv (envs/go2_env.py, envs/mpm_env.py). Those are built
+around a floating-base robot driven by a trained locomotion policy's 12-dof position actions
+each control step, with a full observation/reward/command/termination pipeline behind them --
+none of which applies to a bench test with a welded base, no policy, and one leg under direct
+IK control. This script owns its own minimal scene, built from the same mud building blocks
+(envs/mud.py) as the walking evals.
+
+The pit is the Go2 pit (envs/mud.py: go2_mud_pit) with a different soft layer: sand from 6.5 to
+15 cm (INTRUSION_SOFT_LAYER below) where scripts/eval_mpm.py uses elasto-plastic mud from 6 to
+11 cm. Earlier results from this bench used this sand layer, so it is kept.
 
     python scripts/eval_mpm_1d_intrusion.py --depth 0.06 --rate 0.02 --headless
 """
@@ -36,30 +37,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 import genesis as gs
-from genesis.utils.geom import quat_to_xyz, transform_by_quat
+from genesis.utils.geom import transform_by_quat
 
-import matplotlib
-
-matplotlib.use("Agg")  # report files only; never open a GUI alongside the genesis viewer
-import matplotlib.pyplot as plt
-
-# Style tokens duplicated from scripts/unitree_policy/reporting.py (not imported) to keep
-# this script's only dependency on the rest of the repo at the CLI/config-loading layer.
-SERIES = ("#2a78d6", "#008300", "#e87ba4")
-INK = "#0b0b0b"
-INK_MUTED = "#52514e"
-SURFACE = "#fcfcfb"
-GRID = "#e0e0dc"
-
-# Go2 URDF, matching envs/go2_env.py's GO2_URDF but resolved independently so this script
-# doesn't import from that module.
-GO2_URDF = str(REPO_ROOT / "assets" / "go2" / "urdf" / "go2.urdf")
+from envs import mud
+from envs.go2_env import GO2_URDF
+from scripts.unitree_policy import plots
+from scripts.unitree_policy.eval_cfg import load_cfgs, resolve_policy
 
 # Every *_foot link is a fixed child of its *_calf link, at this local offset in all four
 # legs (confirmed in the URDF) -- and Genesis's URDF loader collapses fixed-joint children
 # into their parent at build time, so no separate "*_foot" RigidLink exists to query
 # directly. The foot's world position is therefore computed by hand each step:
-# calf_pos + R(calf_quat) @ FOOT_LOCAL_OFFSET. get_foot_forces() (below) already reads
+# calf_pos + R(calf_quat) @ FOOT_LOCAL_OFFSET. get_foot_forces() (envs/mud.py) already reads
 # reaction force off the *_calf link for the same reason.
 FOOT_LOCAL_OFFSET = (0.0, 0.0, -0.213)
 # The foot's collision geometry is a sphere of this radius; "depth into the mud" is
@@ -72,74 +61,13 @@ MAX_LEG_REACH = 2 * 0.213
 
 LEGS = ("FR", "FL", "RR", "RL")
 
-
-def build_mpm_cfg(grid_density):
-    """Same mud pit as scripts/eval_mpm.py's build_mpm_cfg -- kept as a hand-copied
-    duplicate rather than an import so this script has zero coupling to that file.
-    """
-    return {
-        "grid_density": grid_density,
-        "coup_friction": 0.4,
-        "coup_softness": 0.01,
-        "wall_height": 0.5,
-        "wall_thickness": 0.03,
-        "bounds_lower": (1, -0.4864, -0.1),
-        "bounds_upper": (4.6576, 0.4864, 0.381),
-        "patches": [
-            {
-                "name": "stiff_mud",
-                "material": "elastic",
-                "E": 1e6,
-                "nu": 0.35,
-                "rho": 1800.0,
-                "patch_lower": (1.1, -0.38, 0.0),
-                "patch_upper": (4.55, 0.38, 0.06),
-                "color": (0.30, 0.20, 0.12),
-            },
-            {
-                "name": "soft_mud",
-                "material": "sand",
-                "E": 2e4,
-                "nu": 0.35,
-                "rho": 1500.0,
-                "friction_angle": 30.0,
-                "patch_lower": (1.1, -0.38, 0.065),
-                "patch_upper": (4.55, 0.38, 0.15),
-                "color": (0.78, 0.62, 0.46),
-            },
-        ],
-    }
+# Sand top layer of the bench pit; see the module docstring.
+INTRUSION_SOFT_LAYER = mud.soft_layer(
+    "sand", (0.065, 0.15), E=2e4, nu=0.35, rho=1500.0, friction_angle=30.0
+)
 
 
-def _patch_box(patch, mpm_cfg):
-    """Resolve one patch's patch_lower/patch_upper into the (pos, size) gs.morphs.Box wants.
-
-    Copied from Go2MPMEnv._patch_box (scripts/eval_mpm.py) -- see that copy for the
-    reasoning behind the grid-cell inset check.
-    """
-    inset = 3.0 / mpm_cfg["grid_density"]
-    label = patch.get("name", "patch")
-    lower = np.asarray(patch["patch_lower"], dtype=float)
-    upper = np.asarray(patch["patch_upper"], dtype=float)
-    bounds_lower = np.asarray(mpm_cfg["bounds_lower"], dtype=float) + inset
-    bounds_upper = np.asarray(mpm_cfg["bounds_upper"], dtype=float) - inset
-
-    for axis, name in enumerate("xyz"):
-        if upper[axis] <= lower[axis]:
-            raise ValueError(f"patch '{label}': patch_upper must exceed patch_lower on {name}")
-        if lower[axis] < bounds_lower[axis] or upper[axis] > bounds_upper[axis]:
-            raise ValueError(
-                f"patch '{label}' overflows the MPM domain on {name}: spans "
-                f"[{lower[axis]:.3f}, {upper[axis]:.3f}], usable region is "
-                f"[{bounds_lower[axis]:.3f}, {bounds_upper[axis]:.3f}]"
-            )
-
-    pos = tuple(float(v) for v in (lower + upper) / 2)
-    size = tuple(float(v) for v in (upper - lower))
-    return pos, size
-
-
-class Go2MPM1DIntrusionEnv:
+class Go2MPM1DIntrusionEnv(mud.MudFootForces):
     """A Go2 with its base welded to the world above an MPM mud pit.
 
     Not a subclass of Go2Env: that class's constructor hardcodes a floating-base URDF
@@ -155,12 +83,7 @@ class Go2MPM1DIntrusionEnv:
 
         self.scene = gs.Scene(
             sim_options=gs.options.SimOptions(dt=self.dt, substeps=env_cfg["substeps"]),
-            mpm_options=gs.options.MPMOptions(
-                lower_bound=mpm_cfg["bounds_lower"],
-                upper_bound=mpm_cfg["bounds_upper"],
-                grid_density=mpm_cfg["grid_density"],
-                enable_CPIC=True,  # feet are smaller than a grid cell; needed for small rigid bodies to couple
-            ),
+            mpm_options=mud.mpm_options(mpm_cfg),
             rigid_options=gs.options.RigidOptions(
                 enable_self_collision=False,
                 tolerance=1e-5,
@@ -173,11 +96,7 @@ class Go2MPM1DIntrusionEnv:
             show_viewer=show_viewer,
         )
 
-        rigid_material = gs.materials.Rigid(
-            needs_coup=True,
-            coup_friction=mpm_cfg["coup_friction"],
-            coup_softness=mpm_cfg["coup_softness"],
-        )
+        rigid_material = mud.coupling_material(mpm_cfg)
 
         self.plane = self.scene.add_entity(
             gs.morphs.URDF(file="urdf/plane/plane.urdf", fixed=True), material=rigid_material
@@ -193,10 +112,8 @@ class Go2MPM1DIntrusionEnv:
             material=rigid_material,
         )
 
-        self._calf_idx = None
-        self.foot_names = None
-        self.mud_patches = []
-        self._build_mud_and_walls()
+        self.mud_patches = mud.add_mud_patches(self.scene, mpm_cfg)
+        self.walls = mud.add_containment_walls(self.scene, mpm_cfg)
 
         self.cam = None
         if record:
@@ -222,81 +139,6 @@ class Go2MPM1DIntrusionEnv:
         self.robot.set_dofs_position(self.bench_dof_pos.unsqueeze(0), self.motors_dof_idx, zero_velocity=True)
         if self.cam is not None:
             self.cam.start_recording()
-
-    # ---- mud construction (mirrors Go2MPMEnv._add_extra_entities / _add_containment_walls) --
-    def _build_mud_and_walls(self):
-        patches = self.mpm_cfg["patches"]
-        for patch in patches:
-            pos, size = _patch_box(patch, self.mpm_cfg)
-            if patch["material"] == "elastic":
-                material = gs.materials.MPM.Elastic(E=patch["E"], nu=patch["nu"], rho=patch["rho"])
-            elif patch["material"] == "sand":
-                material = gs.materials.MPM.Sand(
-                    E=patch["E"], nu=patch["nu"], rho=patch["rho"], friction_angle=patch["friction_angle"]
-                )
-            else:
-                material = gs.materials.MPM.ElastoPlastic(
-                    E=patch["E"], nu=patch["nu"], rho=patch["rho"],
-                    use_von_mises=True, von_mises_yield_stress=patch["yield_stress"],
-                )
-            entity = self.scene.add_entity(
-                material=material,
-                morph=gs.morphs.Box(pos=pos, size=size),
-                surface=gs.surfaces.Default(color=patch.get("color", (0.35, 0.25, 0.15)), vis_mode="particle"),
-            )
-            self.mud_patches.append(entity)
-
-        lowers = np.asarray([p["patch_lower"] for p in patches], dtype=float)
-        uppers = np.asarray([p["patch_upper"] for p in patches], dtype=float)
-        x_lo, y_lo = lowers[:, 0].min(), lowers[:, 1].min()
-        x_hi, y_hi = uppers[:, 0].max(), uppers[:, 1].max()
-        t = float(self.mpm_cfg["wall_thickness"])
-        h = float(self.mpm_cfg["wall_height"])
-        cx, cy = (x_lo + x_hi) / 2.0, (y_lo + y_hi) / 2.0
-        x_len, y_len = x_hi - x_lo, y_hi - y_lo
-        boards = [
-            ((x_lo - t / 2, cy, h / 2), (t, y_len, h)),
-            ((x_hi + t / 2, cy, h / 2), (t, y_len, h)),
-            ((cx, y_lo - t / 2, h / 2), (x_len + 2 * t, t, h)),
-            ((cx, y_hi + t / 2, h / 2), (x_len + 2 * t, t, h)),
-        ]
-        wall_material = gs.materials.Rigid(needs_coup=False)
-        self.walls = [
-            self.scene.add_entity(
-                material=wall_material,
-                morph=gs.morphs.Box(pos=pos, size=size, fixed=True),
-                surface=gs.surfaces.Default(color=(0.55, 0.57, 0.62), opacity=0.2, vis_mode="visual"),
-            )
-            for pos, size in boards
-        ]
-
-    def get_foot_forces(self):
-        """Per-foot reaction force from the mud, world frame, shape (num_envs, num_feet, 3).
-
-        Identical to Go2MPMEnv.get_foot_forces -- see that copy (scripts/eval_mpm.py) for
-        why this reads dyn_state.links.cfrc_coupling_vel off the *_calf links.
-        """
-        if self._calf_idx is None:
-            calves = [link for link in self.robot.links if link.name.endswith("_calf")]
-            self._calf_idx = [link.idx for link in calves]
-            self.foot_names = [link.name.replace("_calf", " foot") for link in calves]
-        cfrc = self.scene.rigid_solver.dyn_state.links.cfrc_coupling_vel.to_numpy()
-        forces = -cfrc[self._calf_idx]
-        return np.transpose(forces, (1, 0, 2))
-
-
-def _style_axes(ax, title, xlabel, ylabel):
-    ax.set_title(title, color=INK, fontsize=11, loc="left", pad=8)
-    ax.set_xlabel(xlabel, color=INK_MUTED, fontsize=9)
-    ax.set_ylabel(ylabel, color=INK_MUTED, fontsize=9)
-    ax.grid(True, color=GRID, linewidth=0.6, alpha=0.9)
-    ax.set_axisbelow(True)
-    ax.tick_params(colors=INK_MUTED, labelsize=8)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    for side in ("left", "bottom"):
-        ax.spines[side].set_color(GRID)
-
 
 def build_bench_pose(env_cfg, leg, tuck_thigh, tuck_calf):
     """Joint targets for the bench test: the intruding leg at its default angles (IK
@@ -458,9 +300,6 @@ def main():
 
     gs.init(backend=gs.cpu if args.cpu else gs.gpu, precision="32", logging_level="warning")
 
-    sys.path.insert(0, str(REPO_ROOT))
-    from scripts.unitree_policy.eval_cfg import load_cfgs, resolve_policy
-
     ckpt_path = resolve_policy(args.policy)
     env_cfg, _, _, _, _ = load_cfgs(ckpt_path.parent)
     env_cfg["substeps"] = args.substeps
@@ -469,8 +308,8 @@ def main():
     if args.effort_limit is not None:
         env_cfg["effort_limit"] = args.effort_limit
 
-    mpm_cfg = build_mpm_cfg(args.grid_density)
-    slab_top = max(p["patch_upper"][2] for p in mpm_cfg["patches"])
+    mpm_cfg = mud.go2_mud_pit(INTRUSION_SOFT_LAYER, grid_density=args.grid_density)
+    slab_top = mud.surface_height(mpm_cfg)
     cx = (mpm_cfg["bounds_lower"][0] + mpm_cfg["bounds_upper"][0]) / 2.0
     _, base_y, _ = env_cfg["base_init_pos"]
     # Suspended above the pit's centre. Hips sit at base height, so a foot can be driven at
@@ -496,7 +335,7 @@ def main():
         env_cfg, mpm_cfg, bench_dof_pos,
         show_viewer=not args.headless, record=not args.no_video, cam_kwargs=cam_kwargs,
     )
-    patch_counts = {p["name"]: int(e.n_particles) for p, e in zip(mpm_cfg["patches"], env.mud_patches)}
+    patch_counts = mud.particle_counts(mpm_cfg, env.mud_patches)
     print(f"MPM patches: {patch_counts} | total particles: {sum(patch_counts.values())}")
 
     leg_joint_idx = [i for i, name in enumerate(env_cfg["joint_names"]) if name.startswith(f"{leg}_")]
@@ -610,10 +449,10 @@ def main():
     out_dir = REPO_ROOT / "logs_for_1d" / f"{stamp}_{ckpt_path.parent.name}_{leg}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    _plot_force_time(out_dir, data)
-    _plot_depth_time(out_dir, data)
-    _plot_force_depth(out_dir, data, n_descend=int(np.argmax(data["depth_cmd"] >= args.depth - 1e-9)) + 1)
-    _plot_torque_time(out_dir, data, leg)
+    plots.plot_intrusion_force_time(out_dir, data)
+    plots.plot_intrusion_depth_time(out_dir, data)
+    plots.plot_intrusion_force_depth(out_dir, data, n_descend=int(np.argmax(data["depth_cmd"] >= args.depth - 1e-9)) + 1)
+    plots.plot_intrusion_torque_time(out_dir, data, leg)
 
     np.savez(out_dir / "intrusion_data.npz", **data)
 
@@ -656,66 +495,6 @@ def main():
     print(f"report written to {out_dir}")
     for key, value in metrics.items():
         print(f"  {key}: {value}")
-
-
-def _plot_force_time(out_dir, data):
-    fig, ax = plt.subplots(figsize=(9, 3.6), facecolor=SURFACE)
-    ax.set_facecolor(SURFACE)
-    ax.axhline(0.0, color=INK_MUTED, linewidth=1.0, linestyle="--")
-    for k, comp in zip(("fx", "fy", "fz"), ("F_x", "F_y", "F_z")):
-        ax.plot(data["t"], data[k], linewidth=1.6, label=comp)
-    _style_axes(ax, "Foot reaction force (world frame)", "time (s)", "force (N)")
-    ax.legend(frameon=False, fontsize=8, labelcolor=INK_MUTED, ncol=3, loc="upper left")
-    fig.tight_layout()
-    fig.savefig(out_dir / "force_time.png", dpi=150, facecolor=SURFACE)
-    plt.close(fig)
-
-
-def _plot_depth_time(out_dir, data):
-    fig, ax = plt.subplots(figsize=(9, 3.2), facecolor=SURFACE)
-    ax.set_facecolor(SURFACE)
-    ax.axhline(0.0, color=INK_MUTED, linewidth=1.0, linestyle="--", label="mud surface")
-    ax.plot(data["t"], data["depth_cmd"], color=INK_MUTED, linewidth=1.2, linestyle=":", label="commanded")
-    ax.plot(data["t"], data["depth_measured"], color=SERIES[0], linewidth=1.6, label="measured")
-    ax.invert_yaxis()  # depth increases downward
-    _style_axes(ax, "Foot depth (below mud surface)", "time (s)", "depth (m)")
-    ax.legend(frameon=False, fontsize=8, labelcolor=INK_MUTED, ncol=3, loc="lower left")
-    fig.tight_layout()
-    fig.savefig(out_dir / "depth_time.png", dpi=150, facecolor=SURFACE)
-    plt.close(fig)
-
-
-def _plot_force_depth(out_dir, data, n_descend):
-    """The actual pressure-sinkage-style curve: F_z vs. measured depth, loading and
-    unloading phases distinguished. The gap between them (if withdrawal was recorded) is
-    hysteresis -- energy the mud didn't return -- exactly what would read as suction-like
-    drag in a raw time series but is really a loading/unloading path difference.
-    """
-    fig, ax = plt.subplots(figsize=(7.5, 5.5), facecolor=SURFACE)
-    ax.set_facecolor(SURFACE)
-    depth, fz = data["depth_measured"], data["fz"]
-    ax.plot(depth[:n_descend], fz[:n_descend], color=SERIES[0], linewidth=1.8, label="loading (descent)")
-    if n_descend < len(depth):
-        ax.plot(depth[n_descend:], fz[n_descend:], color=SERIES[2], linewidth=1.8, label="unloading (retraction/hold)")
-    ax.axvline(0.0, color=INK_MUTED, linewidth=1.0, linestyle="--")
-    _style_axes(ax, "Foot force vs. depth (pressure-sinkage)", "depth below mud surface (m)", "F_z (N)")
-    ax.legend(frameon=False, fontsize=8, labelcolor=INK_MUTED, loc="upper left")
-    fig.tight_layout()
-    fig.savefig(out_dir / "force_depth.png", dpi=150, facecolor=SURFACE)
-    plt.close(fig)
-
-
-def _plot_torque_time(out_dir, data, leg):
-    fig, ax = plt.subplots(figsize=(9, 3.6), facecolor=SURFACE)
-    ax.set_facecolor(SURFACE)
-    ax.axhline(0.0, color=INK_MUTED, linewidth=1.0, linestyle="--")
-    for k, name in zip(("tau_hip", "tau_thigh", "tau_calf"), ("hip", "thigh", "calf")):
-        ax.plot(data["t"], data[k], linewidth=1.6, label=name)
-    _style_axes(ax, f"{leg} leg motor torque", "time (s)", "torque (N m)")
-    ax.legend(frameon=False, fontsize=8, labelcolor=INK_MUTED, ncol=3, loc="upper left")
-    fig.tight_layout()
-    fig.savefig(out_dir / "torque_time.png", dpi=150, facecolor=SURFACE)
-    plt.close(fig)
 
 
 if __name__ == "__main__":

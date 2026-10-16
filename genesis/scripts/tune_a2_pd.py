@@ -50,6 +50,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import genesis as gs  # noqa: E402
 
 from configs.a2_flat import ACTUATOR_GROUPS, get_cfgs  # noqa: E402
+from envs.go2_env import dc_motor_torque_limits, resolve_urdf  # noqa: E402
 
 CONTROL_DT = 0.02
 DECIMATION = 4
@@ -66,7 +67,7 @@ def build(n_envs, dt, substeps, fixed, base_z, armature, batch):
     )
     scene.add_entity(gs.morphs.URDF(file="urdf/plane/plane.urdf", fixed=True))
     robot = scene.add_entity(
-        gs.morphs.URDF(file=str(REPO_ROOT / "assets" / get_cfgs()[0]["urdf"]), pos=(0, 0, base_z), fixed=fixed, default_armature=armature)
+        gs.morphs.URDF(file=resolve_urdf(get_cfgs()[0]["urdf"]), pos=(0, 0, base_z), fixed=fixed, default_armature=armature)
     )
     scene.build(n_envs=n_envs)
     return scene, robot
@@ -87,10 +88,7 @@ class Actuators:
 
     def envelope(self, qd):
         """isaaclab DCMotor._clip_effort bounds for joint velocity qd."""
-        r = qd / self.vlim
-        upper = torch.minimum(torch.clip(self.sat * (1.0 - r), min=0.0), self.effort)
-        lower = torch.maximum(torch.clip(self.sat * (-1.0 - r), max=0.0), -self.effort)
-        return lower, upper
+        return dc_motor_torque_limits(qd, self.sat, self.effort, self.vlim)
 
 
 def targets(act, scenario, n_steps):

@@ -1,5 +1,5 @@
 """Rank mud configs by how well (sim_mud - sim_flat) matches (hw_mud - hw_grass), in units of the hw grass value."""
-import json, sys
+import json
 from pathlib import Path
 S = Path(__file__).resolve().parent
 H = json.load(open(S / "results/hw_targets.json")); hg, hm = H["grass"], H["mud"]

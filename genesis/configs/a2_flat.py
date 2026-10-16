@@ -24,10 +24,10 @@ Training randomized stiffness and damping by a uniform scale in [0.8, 1.25] at e
 from configs.go2_mud_flat import get_cfgs as _get_go2_cfgs
 from configs.go2_walking import get_train_cfg
 
-__all__ = ["get_cfgs", "get_train_cfg", "ACTUATOR_GROUPS"]
+__all__ = ["get_cfgs", "get_train_cfg", "ACTUATOR_GROUPS", "JOINT_NAMES"]
 
 # Same order as env.yaml actions.joint_pos.joint_names (preserve_order: true).
-_JOINT_NAMES = [
+JOINT_NAMES = [
     f"{leg}_{part}_joint" for leg in ("FR", "FL", "RR", "RL") for part in ("hip", "thigh", "calf")
 ]
 
@@ -44,7 +44,7 @@ def _group_of(joint_name):
 
 
 def _by_joint(key):
-    return {name: ACTUATOR_GROUPS[_group_of(name)][key] for name in _JOINT_NAMES}
+    return {name: ACTUATOR_GROUPS[_group_of(name)][key] for name in JOINT_NAMES}
 
 
 def get_cfgs():
@@ -53,11 +53,11 @@ def get_cfgs():
     env_cfg.update(
         {
             "urdf": "a2/urdf/a2.urdf",
-            "joint_names": _JOINT_NAMES,
+            "joint_names": JOINT_NAMES,
             # env.yaml init_state.joint_pos. Unlike the Go2 port, the hips are 0.0 and the
             # rear thighs match the front ones.
             "default_joint_angles": {
-                name: {"hip": 0.0, "thigh": 0.8, "calf": -1.5}[_group_of(name)] for name in _JOINT_NAMES
+                name: {"hip": 0.0, "thigh": 0.8, "calf": -1.5}[_group_of(name)] for name in JOINT_NAMES
             },
             "base_init_pos": [0.0, 0.0, 0.45],  # env.yaml init_state.pos
             # PD gains, per actuator group
@@ -86,7 +86,7 @@ def get_cfgs():
     # env.yaml actions.joint_pos.scale: hips 0.125, everything else 0.25. This is the same
     # rule the Go2 config applies, rebuilt here in case joint naming ever diverges.
     env_cfg["action_scale"] = {
-        name: (0.125 if _group_of(name) == "hip" else 0.25) for name in _JOINT_NAMES
+        name: (0.125 if _group_of(name) == "hip" else 0.25) for name in JOINT_NAMES
     }
 
     # Rewards are unused at eval. base_height_target is only a placeholder for fine-tuning:
