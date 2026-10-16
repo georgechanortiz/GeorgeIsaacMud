@@ -213,6 +213,18 @@ def _migrate_legacy_checkpoint(loaded):
     return {**loaded, "actor_state_dict": actor}
 
 
+def _agent_experiment_name(log_dir):
+    """The experiment a run was trained under, from its params/agent.yaml.
+
+    Lets a run directory that was copied out of logs/<experiment>/ on its own (e.g. straight
+    into Policies/) still map to its configs/ module.
+    """
+    agent_yaml = log_dir / "params" / "agent.yaml"
+    if not agent_yaml.exists():
+        return None
+    return yaml.unsafe_load(agent_yaml.read_text()).get("experiment_name")
+
+
 def load_cfgs(log_dir, config=None):
     """Assemble (env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg) for a run.
 
@@ -228,7 +240,9 @@ def load_cfgs(log_dir, config=None):
             return pickle.load(f)
 
     if config is None:
-        config = CONFIG_BY_EXPERIMENT.get(log_dir.parent.name, DEFAULT_CONFIG)
+        config = CONFIG_BY_EXPERIMENT.get(log_dir.parent.name) or CONFIG_BY_EXPERIMENT.get(
+            _agent_experiment_name(log_dir), DEFAULT_CONFIG
+        )
     mod = importlib.import_module(f"configs.{config}")
     env_cfg, obs_cfg, reward_cfg, command_cfg = mod.get_cfgs()
 

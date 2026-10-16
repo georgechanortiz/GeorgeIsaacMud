@@ -500,8 +500,12 @@ class Reporter:
         self._finish(fig, name)
 
 
-def run_rollout(env, policy, steps=None, reporter=None):
-    """Step the env. Runs forever when `steps` is None, matching the viewer scripts."""
+def run_rollout(env, policy, steps=None, reporter=None, stop_when=None):
+    """Step the env until `steps` control steps have run or `stop_when(env)` returns True,
+    whichever comes first. Runs forever when both are None, matching the viewer scripts.
+
+    `stop_when` is checked after each step is recorded, so the step that meets it is in the report.
+    """
     obs_dict = env.reset()
     wall_start = time.perf_counter()
     with torch.no_grad():
@@ -512,6 +516,9 @@ def run_rollout(env, policy, steps=None, reporter=None):
             if reporter is not None:
                 reporter.record(env, policy)
             i += 1
+            if stop_when is not None and stop_when(env):
+                print(f"rollout: stop condition met after {i} steps")
+                break
     wall_s = time.perf_counter() - wall_start
     sim_s = i * env.dt
     if sim_s > 0:

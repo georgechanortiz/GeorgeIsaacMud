@@ -61,7 +61,7 @@ from scripts.eval_mpm import Go2MPMEnv
 from scripts.unitree_policy.eval_cfg import load_cfgs, load_policy, resolve_policy
 from scripts.unitree_policy.reporting import Reporter, run_rollout
 
-DEFAULT_A2_POLICY = "/home/rml2/Documents/george/a2_mud/logs/rsl_rl/a2_flat/2026-10-08_21-07-46/model_2400.pt"
+DEFAULT_A2_POLICY = "/home/rml3/Documents/george/GeorgeIsaacMud/genesis/Policies/a2_flat/2026-10-08_21-07-46/model_4999.pt"
 
 # The A2 is ~0.65 m long and stands ~0.45 m tall, against ~0.45 m / 0.30 m for the Go2, so the
 # Go2 framing crops it. Same viewing direction, pulled back and aimed a little higher.
@@ -112,7 +112,8 @@ def main():
     )
     parser.add_argument("--reporting", action="store_true", help="run a finite rollout and write plots + params to reports/<experiment>/<timestamp>/")
     parser.add_argument("--headless", action="store_true", help="skip the interactive viewer window. With --reporting, the offscreen camera still records rollout.mp4.")
-    parser.add_argument("--steps", type=int, default=1000, help="rollout length when --reporting is set")
+    parser.add_argument("--steps", type=int, default=1000, help="maximum rollout length when --reporting is set. The rollout normally ends sooner, when the robot reaches the far end of the pit (see --end-margin); this cap only ends runs where it stalls")
+    parser.add_argument("--end-margin", type=float, default=0.55, metavar="M", help="end the rollout once the base is within M of the pit's far wall. 0.55 puts the front feet at the end of the mud while the body is still clear of the wall (the cut-off scripts/mud_calibration/run_one.py uses)")
     # --- mud layer (defaults are the hardware-calibrated viscous liquid, see the module docstring) ---
     parser.add_argument("--mud-depth", type=float, default=0.1016, metavar="M", help="Depth of the mud layer on the floor (m). Default 0.1016 = 4 inches, the hardware pit.")
     parser.add_argument("--material", choices=("liquid", "elasto_plastic", "sand", "snow", "elastic"), default="liquid", help="MPM material of the mud layer.")
@@ -195,6 +196,13 @@ def main():
         env_cfg["base_init_pos"] = [spawn_x + float(dx), by + float(dy), bz + slab_top]
         print(f"seed {args.seed}: spawn offset dx={dx:+.4f} m dy={dy:+.4f} m")
 
+    # End the rollout at the far end of the pit rather than after a fixed time. Past it the robot
+    # stands pinned against the far wall, and that idle time dilutes every averaged metric.
+    pit_end_x = max(p["patch_upper"][0] for p in patches) - args.end_margin
+
+    def reached_pit_end(env):
+        return float(env.base_pos[0, 0]) >= pit_end_x
+
     env = A2MPMEnv(
         num_envs=1,  # MPM state is not batched cheaply; keep this at 1
         env_cfg=env_cfg,
@@ -234,6 +242,9 @@ def main():
                     "seed": args.seed,
                 },
                 "effort_scale": args.effort_scale,
+                "pit_end_x": pit_end_x,
+                "end_margin": args.end_margin,
+                "max_steps": args.steps,
                 "mpm_particles": total_particles,
                 "mpm_particles_by_patch": patch_counts,
                 "num_envs": 1,
@@ -242,14 +253,17 @@ def main():
                 "substeps": env_cfg["substeps"],
                 "env_cfg": env_cfg,
                 "command_cfg": command_cfg,
-                "obs_scales": obs_cfg["obs_scales"],l
+                "obs_scales": obs_cfg["obs_scales"],
             },
             reports_dir=Path(args.out_root) if args.out_root else REPO_ROOT / "reports",
         )
 
-    run_rollout(env, policy, steps=args.steps if args.reporting else None, reporter=reporter)
+    run_rollout(env, policy, steps=args.steps if args.reporting else None, reporter=reporter, stop_when=reached_pit_end)
+    reached = reached_pit_end(env)
+    print(f"robot {'reached' if reached else 'did not reach'} the end of the pit (x >= {pit_end_x:.3f} m)")
 
     if reporter is not None:
+        reporter.params["reached_pit_end"] = reached
         out_dir, metrics = reporter.finalize(env)
         print(f"report written to {out_dir}")
         for key, value in metrics.items():
