@@ -1,0 +1,41 @@
+# Sphere drop bench (scripts/eval_mpm_1d_intrusion.py).
+# Run with:  python scripts/eval_mpm_1d_intrusion.py [--config configs/sphere_drop.yaml]
+# Units are SI throughout (m, kg, s, Pa). Every key is required; unknown keys are an error.
+
+sphere:
+  radius: 0.05              # m
+  mass: 1.0                 # kg; realised as a solid sphere of uniform density (inertia 2/5 m r^2)
+  drop_height: 0.5          # m, rigid floor (pit bottom, z = 0) to the sphere's centre at release
+  drop_xy: [0.0, 0.0]       # m, release point relative to the pit centre
+  init_vel: [0.0, 0.0, 0.0]       # m/s at release; a negative z throws it down
+  init_ang_vel: [0.0, 0.0, 0.0]   # rad/s at release
+  coup_friction: 0.4        # sphere <-> sand friction coefficient in the MPM coupling
+  coup_softness: 0.01       # m, reach of the sphere <-> sand coupling; keep comparable to the grid
+                            # spacing (~21 mm at grid_density 48) or the contact is under-resolved
+  coup_restitution: 0.0     # normal restitution of sand bouncing off the sphere (0 = inelastic, right for granular media)
+  friction: null            # sphere <-> rigid (floor, walls) friction; null = Genesis default.
+                            # Only matters if the sphere reaches the pit bottom
+  sdf_cell_size: 0.005      # m, SDF resolution the coupler uses to find the sphere's surface; keep well under radius
+
+pit:
+  side: 0.6096              # m (2 ft), square
+  depth: 0.1524             # m (6 in) of sand on the rigid floor
+
+sand:
+  grid_density: 48          # MPM cells per metre; also sets particle size (0.64 / grid_density m)
+  E: 2.0e4                  # Pa, Young's modulus
+  nu: 0.35                  # Poisson ratio, must stay < 0.5
+  rho: 1500.0               # kg/m^3
+  friction_angle: 30.0      # deg, internal friction angle
+  settle_s: 1.0             # s the sand settles under gravity (sphere held) before release; the
+                            # settled free surface is the depth datum
+  surface_percentile: 99.0  # percentile of settled particle z taken as the surface (not the max,
+                            # which stray particles would set)
+
+sim:
+  duration: 1.5             # s recorded after release
+  dt: 0.005                 # s recording step; impacts last tens of ms
+  substeps: 15              # per dt; 0.005 / 15 = 0.33 ms, the walking evals' MPM substep
+  cpu: false                # much slower for MPM
+  headless: true            # skip the interactive viewer
+  video: true               # rollout.mp4, covering the settle and the drop

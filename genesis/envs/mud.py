@@ -1,6 +1,6 @@
 """Building blocks for an MPM mud pit, and the pits the eval scripts use.
 
-Shared by the policy-driven MPM envs (envs/mpm_env.py), the fixed-base intrusion bench
+Shared by the policy-driven MPM envs (envs/mpm_env.py), the sphere drop bench
 (scripts/eval_mpm_1d_intrusion.py) and the mud calibration (scripts/mud_calibration/run_one.py),
 so they all build the same mud the same way.
 
@@ -26,15 +26,16 @@ _BOUNDS_LOWER = (1, -0.4864, -0.1)
 _BOUNDS_UPPER = (4.6576, 0.4864, 0.381)
 
 
-def _pit(grid_density, patches, wall_height, coup_friction=0.4, coup_softness=0.01):
+def _pit(grid_density, patches, wall_height, coup_friction=0.4, coup_softness=0.01,
+         bounds_lower=_BOUNDS_LOWER, bounds_upper=_BOUNDS_UPPER):
     return {
         "grid_density": grid_density,    # cells per metre. higher = finer particles, costs speed (~cubic)
         "coup_friction": coup_friction,  # higher = more grip between the feet and the material
         "coup_softness": coup_softness,  # metres; reach of the foot<->material coupling, see coupling_material
         "wall_height": wall_height,      # m, from the ground up; taller than the mud + robot stance
         "wall_thickness": 0.03,          # m
-        "bounds_lower": _BOUNDS_LOWER,
-        "bounds_upper": _BOUNDS_UPPER,
+        "bounds_lower": bounds_lower,
+        "bounds_upper": bounds_upper,
         "patches": patches,
     }
 
@@ -80,6 +81,29 @@ def a2_mud_pit(mud, depth, grid_density=48, coup_friction=0.4, coup_softness=0.0
         "color": (0.55, 0.42, 0.30),
     }
     return _pit(grid_density, [layer], wall_height=0.6, coup_friction=coup_friction, coup_softness=coup_softness)
+
+
+def drop_pit(layer, side=0.6096, depth=0.1524, grid_density=48, wall_height=0.2):
+    """A square pit `side` x `side` (default 2 ft) of `layer` filled `depth` deep (default 6 in), centred on the origin.
+
+    Unlike the hardware pit, the MPM domain hugs the patch: its usable region (bounds inset by
+    3 cells) ends right at the patch's sides, so the domain boundary is what holds the material
+    in -- the rigid walls are needs_coup=False and only visual. The 1 mm slack keeps float
+    rounding from tripping patch_box's bounds check.
+    """
+    half = side / 2.0
+    lateral = half + 3.0 / grid_density + 1e-3
+    patch = {
+        "name": layer.get("name", "mud"),
+        **layer,
+        "patch_lower": (-half, -half, 0.0),
+        "patch_upper": (half, half, depth),
+        "color": layer.get("color", (0.78, 0.62, 0.46)),
+    }
+    return _pit(
+        grid_density, [patch], wall_height=wall_height,
+        bounds_lower=(-lateral, -lateral, -0.1), bounds_upper=(lateral, lateral, 0.4),
+    )
 
 
 def surface_height(mpm_cfg):
@@ -250,6 +274,18 @@ def add_containment_walls(scene, mpm_cfg):
     ]
 
 
+def coupling_force(scene, links_idx):
+    """Force the MPM material exerts on each of the given rigid links, world frame, shape (num_envs, num_links, 3).
+
+    get_links_net_contact_force() only reports rigid-rigid contacts, which are ~zero for a body
+    resting on MPM material -- the material pushes on it through the MPM<->rigid coupler instead,
+    landing in dyn_state.links.cfrc_coupling_vel. `links_idx` are global link indices.
+    """
+    cfrc = scene.rigid_solver.dyn_state.links.cfrc_coupling_vel.to_numpy()
+    forces = -cfrc[links_idx]               # (num_links, num_envs, 3)
+    return np.transpose(forces, (1, 0, 2))  # (num_envs, num_links, 3)
+
+
 def particle_counts(mpm_cfg, entities):
     """{patch name: particle count}, in config order."""
     return {p["name"]: int(e.n_particles) for p, e in zip(mpm_cfg["patches"], entities)}
@@ -264,15 +300,11 @@ class MudFootForces:
     def get_foot_forces(self):
         """Per-foot reaction force from the mud, world frame, shape (num_envs, num_feet, 3).
 
-        get_links_net_contact_force() only reports rigid-rigid contacts, which are ~zero
-        for feet standing on MPM material -- the mud pushes on the feet through the
-        MPM<->rigid coupler instead, landing in dyn_state.links.cfrc_coupling_vel. The
-        foot sphere is fixed to the calf link, so the *_calf links carry the foot forces.
+        The foot sphere is fixed to the calf link, so the *_calf links carry the foot forces
+        (see coupling_force).
         """
         if self._calf_idx is None:
             calves = [link for link in self.robot.links if link.name.endswith("_calf")]
             self._calf_idx = [link.idx for link in calves]  # global indices into the solver's link block
             self.foot_names = [link.name.replace("_calf", " foot") for link in calves]  # FL/FR/RL/RR
-        cfrc = self.scene.rigid_solver.dyn_state.links.cfrc_coupling_vel.to_numpy()
-        forces = -cfrc[self._calf_idx]          # (num_feet, num_envs, 3)
-        return np.transpose(forces, (1, 0, 2))  # (num_envs, num_feet, 3)
+        return coupling_force(self.scene, self._calf_idx)

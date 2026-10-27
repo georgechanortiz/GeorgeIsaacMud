@@ -2,7 +2,7 @@
 
 Every figure function takes the directory to write into, so the same plots serve the sim
 reports (Reporter.finalize), the hardware runs (scripts/mud_calibration/plot_hw_report.py)
-and the 1D intrusion bench (scripts/eval_mpm_1d_intrusion.py).
+and the sphere drop bench (scripts/eval_mpm_1d_intrusion.py).
 """
 
 import matplotlib
@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Categorical slots 1-3 of the validated reference palette, used in fixed order.
-# Three series max per axis here (hip/thigh/calf), so slots 4+ are never reached.
+# Three series max per axis here (hip/thigh/calf, x/y/z), so slots 4+ are never reached.
 SERIES = ("#2a78d6", "#008300", "#e87ba4")
 # One colour per leg (FL, RL, FR, RR) for the hardware bag plots. quad-sdk's own CMU colours put
 # FL red next to FR green, which colour-blind readers cannot separate.
@@ -296,64 +296,57 @@ def plot_error(out_dir, t, err, title, ylabel, name, signed=False):
     _save(fig, out_dir, name)
 
 
-# ---- 1D intrusion bench ------------------------------------------------------------------------
+# ---- sphere drop bench ------------------------------------------------------------------------
 
 
-def plot_intrusion_force_time(out_dir, data):
+def plot_drop_force_time(out_dir, data):
     fig, ax = plt.subplots(figsize=(9, 3.6), facecolor=SURFACE)
     ax.set_facecolor(SURFACE)
     ax.axhline(0.0, color=INK_MUTED, linewidth=1.0, linestyle="--")
-    for k, comp in zip(("fx", "fy", "fz"), ("F_x", "F_y", "F_z")):
-        ax.plot(data["t"], data[k], linewidth=1.6, label=comp)
-    style_axes(ax, "Foot reaction force (world frame)", "time (s)", "force (N)")
+    for k, comp, color in zip(("fx", "fy", "fz"), ("F_x", "F_y", "F_z"), SERIES):
+        ax.plot(data["t"], data[k], color=color, linewidth=1.6, label=comp)
+    style_axes(ax, "Mud force on the sphere (world frame)", "time since release (s)", "force (N)")
     ax.legend(frameon=False, fontsize=8, labelcolor=INK_MUTED, ncol=3, loc="upper left")
     fig.tight_layout()
     fig.savefig(out_dir / "force_time.png", dpi=150, facecolor=SURFACE)
     plt.close(fig)
 
 
-def plot_intrusion_depth_time(out_dir, data):
-    fig, ax = plt.subplots(figsize=(9, 3.2), facecolor=SURFACE)
-    ax.set_facecolor(SURFACE)
-    ax.axhline(0.0, color=INK_MUTED, linewidth=1.0, linestyle="--", label="mud surface")
-    ax.plot(data["t"], data["depth_cmd"], color=INK_MUTED, linewidth=1.2, linestyle=":", label="commanded")
-    ax.plot(data["t"], data["depth_measured"], color=SERIES[0], linewidth=1.6, label="measured")
-    ax.invert_yaxis()  # depth increases downward
-    style_axes(ax, "Foot depth (below mud surface)", "time (s)", "depth (m)")
-    ax.legend(frameon=False, fontsize=8, labelcolor=INK_MUTED, ncol=3, loc="lower left")
+def plot_drop_depth_time(out_dir, data):
+    """Penetration (sphere bottom below the settled surface) and vertical velocity, stacked on one time axis."""
+    fig, (ax_d, ax_v) = plt.subplots(2, 1, figsize=(9, 5.6), sharex=True, facecolor=SURFACE)
+    for ax in (ax_d, ax_v):
+        ax.set_facecolor(SURFACE)
+        ax.axhline(0.0, color=INK_MUTED, linewidth=1.0, linestyle="--")
+    ax_d.plot(data["t"], data["depth"], color=SERIES[0], linewidth=1.6)
+    ax_d.invert_yaxis()  # depth increases downward
+    style_axes(ax_d, "Sphere penetration (bottom below mud surface)", "", "depth (m)")
+    ax_v.plot(data["t"], data["vz"], color=SERIES[1], linewidth=1.6)
+    style_axes(ax_v, "Sphere vertical velocity", "time since release (s)", "v_z (m/s)")
     fig.tight_layout()
     fig.savefig(out_dir / "depth_time.png", dpi=150, facecolor=SURFACE)
     plt.close(fig)
 
 
-def plot_intrusion_force_depth(out_dir, data, n_descend):
-    """The actual pressure-sinkage-style curve: F_z vs. measured depth, loading and
-    unloading phases distinguished. The gap between them (if withdrawal was recorded) is
-    hysteresis -- energy the mud didn't return -- exactly what would read as suction-like
-    drag in a raw time series but is really a loading/unloading path difference.
+def plot_drop_force_depth(out_dir, data):
+    """F_z vs. penetration from first contact on. Loading (sphere still moving down) and
+    rebound/rest (moving up or stopped) are drawn separately; the gap between them is energy
+    the mud absorbed.
     """
     fig, ax = plt.subplots(figsize=(7.5, 5.5), facecolor=SURFACE)
     ax.set_facecolor(SURFACE)
-    depth, fz = data["depth_measured"], data["fz"]
-    ax.plot(depth[:n_descend], fz[:n_descend], color=SERIES[0], linewidth=1.8, label="loading (descent)")
-    if n_descend < len(depth):
-        ax.plot(depth[n_descend:], fz[n_descend:], color=SERIES[2], linewidth=1.8, label="unloading (retraction/hold)")
+    contact = data["depth"] > 0.0
+    if contact.any():
+        start = int(np.argmax(contact))
+        depth, fz, vz = data["depth"][start:], data["fz"][start:], data["vz"][start:]
+        # end of loading = the first step the sphere stops descending
+        n_load = int(np.argmax(vz >= 0.0)) if (vz >= 0.0).any() else len(vz)
+        ax.plot(depth[: n_load + 1], fz[: n_load + 1], color=SERIES[0], linewidth=1.8, label="loading (descending)")
+        if n_load < len(depth):
+            ax.plot(depth[n_load:], fz[n_load:], color=SERIES[2], linewidth=1.8, label="rebound / rest")
     ax.axvline(0.0, color=INK_MUTED, linewidth=1.0, linestyle="--")
-    style_axes(ax, "Foot force vs. depth (pressure-sinkage)", "depth below mud surface (m)", "F_z (N)")
+    style_axes(ax, "Sphere force vs. penetration", "depth below mud surface (m)", "F_z (N)")
     ax.legend(frameon=False, fontsize=8, labelcolor=INK_MUTED, loc="upper left")
     fig.tight_layout()
     fig.savefig(out_dir / "force_depth.png", dpi=150, facecolor=SURFACE)
-    plt.close(fig)
-
-
-def plot_intrusion_torque_time(out_dir, data, leg):
-    fig, ax = plt.subplots(figsize=(9, 3.6), facecolor=SURFACE)
-    ax.set_facecolor(SURFACE)
-    ax.axhline(0.0, color=INK_MUTED, linewidth=1.0, linestyle="--")
-    for k, name in zip(("tau_hip", "tau_thigh", "tau_calf"), ("hip", "thigh", "calf")):
-        ax.plot(data["t"], data[k], linewidth=1.6, label=name)
-    style_axes(ax, f"{leg} leg motor torque", "time (s)", "torque (N m)")
-    ax.legend(frameon=False, fontsize=8, labelcolor=INK_MUTED, ncol=3, loc="upper left")
-    fig.tight_layout()
-    fig.savefig(out_dir / "torque_time.png", dpi=150, facecolor=SURFACE)
     plt.close(fig)
