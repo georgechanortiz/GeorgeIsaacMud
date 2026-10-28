@@ -1,5 +1,5 @@
-# Sphere drop bench (scripts/eval_mpm_1d_intrusion.py).
-# Run with:  python scripts/eval_mpm_1d_intrusion.py [--config configs/sphere_drop.yaml]
+# Sphere drop bench (scripts/eval_mpm_drop_test.py).
+# Run with:  python scripts/eval_mpm_drop_test.py [--config configs/sphere_drop.yaml]
 # Units are SI throughout (m, kg, s, Pa). Every key is required; unknown keys are an error.
 
 sphere:
@@ -9,25 +9,34 @@ sphere:
   drop_xy: [0.0, 0.0]       # m, release point relative to the pit centre
   init_vel: [0.0, 0.0, 0.0]       # m/s at release; a negative z throws it down
   init_ang_vel: [0.0, 0.0, 0.0]   # rad/s at release
-  coup_friction: 0.4        # sphere <-> sand friction coefficient in the MPM coupling
-  coup_softness: 0.01       # m, reach of the sphere <-> sand coupling; keep comparable to the grid
+  coup_friction: 0.4        # sphere <-> mud friction coefficient in the MPM coupling
+  coup_softness: 0.01       # m, reach of the sphere <-> mud coupling; keep comparable to the grid
                             # spacing (~21 mm at grid_density 48) or the contact is under-resolved
-  coup_restitution: 0.0     # normal restitution of sand bouncing off the sphere (0 = inelastic, right for granular media)
+  coup_restitution: 0.0     # normal restitution of mud bouncing off the sphere (0 = inelastic)
   friction: null            # sphere <-> rigid (floor, walls) friction; null = Genesis default.
                             # Only matters if the sphere reaches the pit bottom
   sdf_cell_size: 0.005      # m, SDF resolution the coupler uses to find the sphere's surface; keep well under radius
 
 pit:
   side: 0.6096              # m (2 ft), square
-  depth: 0.1524             # m (6 in) of sand on the rigid floor
+  depth: 0.1524             # m (6 in) of mud on the rigid floor
 
-sand:
-  grid_density: 48          # MPM cells per metre; also sets particle size (0.64 / grid_density m)
-  E: 2.0e4                  # Pa, Young's modulus
+# The best elasto-plastic mud from the A2 calibration (ep_E2e4_y80 in scripts/mud_calibration/score.py;
+# the alternative command in the eval_mpm_a2.py docstring). Elasto-plastic rather than the A2's default
+# viscous liquid because it has a yield stress, so it can hold the sphere up the way real mud does; the
+# liquid lets anything denser than itself sink to the floor. The calibration matched a walking robot's
+# calf torques with the feet reaching the floor, not a dropped sphere, so the yield stress is a starting
+# point, not a measurement of the hardware mud.
+mud:
+  material: elasto_plastic  # liquid | elasto_plastic | sand | snow | elastic. Each needs its own extra key:
+                            # liquid: viscous, elasto_plastic: yield_stress (Pa), sand: friction_angle (deg)
+  E: 2.0e+4                 # Pa (write the exponent sign: YAML reads 2.0e4 as a string)
   nu: 0.35                  # Poisson ratio, must stay < 0.5
-  rho: 1500.0               # kg/m^3
-  friction_angle: 30.0      # deg, internal friction angle
-  settle_s: 1.0             # s the sand settles under gravity (sphere held) before release; the
+  rho: 1500.0               # kg/m^3; wet mud is 1300-1800
+  yield_stress: 80.0        # Pa, von Mises yield stress: below it the mud deforms elastically and holds
+                            # its shape, above it it flows. No rate dependence (no viscosity).
+  grid_density: 48          # MPM cells per metre; also sets particle size (0.64 / grid_density m)
+  settle_s: 1.0             # s the mud settles under gravity (sphere held) before release; the
                             # settled free surface is the depth datum
   surface_percentile: 99.0  # percentile of settled particle z taken as the surface (not the max,
                             # which stray particles would set)

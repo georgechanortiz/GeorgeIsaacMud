@@ -1,20 +1,20 @@
-"""Sphere drop bench: a rigid sphere dropped into a small MPM sand pit.
+"""Sphere drop bench: a rigid sphere dropped into a small MPM mud pit.
 
 For validating a reduced-order mud reaction force model against Genesis's MPM ground truth
 with the simplest possible intruder. The pit is 2 ft x 2 ft and 6 in deep (envs/mud.py:
-drop_pit), filled with one layer of the sand the earlier leg-intrusion bench used, at
+drop_pit), filled with one layer of the A2 calibration's elasto-plastic mud (configs/sphere_drop.yaml), at
 the same grid density and so the same particle size. A free 6-DOF
-sphere is held above it while the sand settles under gravity, then released and tracked:
-position, velocity, penetration below the settled surface, and the force the sand puts on it.
+sphere is held above it while the mud settles under gravity, then released and tracked:
+position, velocity, penetration below the settled surface, and the force the mud puts on it.
 
 The drop height is measured from the rigid floor (z = 0, the bottom of the pit) to the
-sphere's centre, so with the default 6 in fill the sphere's bottom clears the sand by
+sphere's centre, so with the default 6 in fill the sphere's bottom clears the mud by
 drop_height - radius - 0.1524 m.
 
-Every parameter (sphere, pit, sand, sim) lives in a YAML config, configs/sphere_drop.yaml
+Every parameter (sphere, pit, mud, sim) lives in a YAML config, configs/sphere_drop.yaml
 by default; a copy of the one used is saved with each run.
 
-    python scripts/eval_mpm_1d_intrusion.py [--config configs/sphere_drop.yaml]
+    python scripts/eval_mpm_drop_test.py [--config configs/sphere_drop.yaml]
 """
 
 import argparse
@@ -42,12 +42,51 @@ DEFAULT_CONFIG = REPO_ROOT / "configs" / "sphere_drop.yaml"
 # The keys each config section must have -- exactly these, so a typo fails loudly instead of
 # silently falling back to nothing.
 CONFIG_KEYS = {
-    "sphere": {"radius", "mass", "drop_height", "drop_xy", "init_vel", "init_ang_vel", "coup_friction",
-               "coup_softness", "coup_restitution", "friction", "sdf_cell_size"},
-    "pit": {"side", "depth"},
-    "sand": {"grid_density", "E", "nu", "rho", "friction_angle", "settle_s", "surface_percentile"},
-    "sim": {"duration", "dt", "substeps", "cpu", "headless", "video"},
+    "sphere": {"radius", 
+               "mass", 
+               "drop_height", 
+               "drop_xy", 
+               "init_vel", 
+               "init_ang_vel",
+               "coup_friction",
+               "coup_softness", 
+               "coup_restitution", 
+               "friction", 
+               "sdf_cell_size"
+            },
+            
+    "pit": {"side", 
+            "depth"
+        },
+
+    "mud": {"material",
+            "E",
+            "nu",
+            "rho",
+            "grid_density",
+            "settle_s",
+            "surface_percentile"
+           },
+
+    "sim": {"duration", 
+            "dt", 
+            "substeps",
+            "cpu",
+            "headless",
+            "video"},
 }
+
+# The extra mud key each MPM material needs on top of CONFIG_KEYS["mud"] (see envs/mud.py: mpm_material).
+MATERIAL_KEYS = {
+    "liquid": {"viscous"},
+    "elasto_plastic": {"yield_stress"},
+    "sand": {"friction_angle"},
+    "snow": set(),
+    "elastic": set(),
+}
+
+# Mud keys that configure the bench rather than the material itself.
+MUD_BENCH_KEYS = ("grid_density", "settle_s", "surface_percentile")
 
 
 class SphereDropEnv:
@@ -57,6 +96,10 @@ class SphereDropEnv:
         self.mpm_cfg = mpm_cfg
         self.dt = dt
 
+        # Entities get their indices in the order they are added below (floor, sphere, mud,
+        # walls); sphere_force relies on the sphere's link index, so keep this order.
+
+        # --- Scene: sim timestep, MPM grid sized to the pit, rigid solver, viewer aimed at the pit ---
         self.scene = gs.Scene(
             sim_options=gs.options.SimOptions(dt=dt, substeps=substeps),
             mpm_options=mud.mpm_options(mpm_cfg),
@@ -68,10 +111,12 @@ class SphereDropEnv:
             show_viewer=show_viewer,
         )
 
+        # --- Rigid floor: fixed plane at z = 0 (the pit bottom), coupled so the mud rests on it ---
         self.plane = self.scene.add_entity(
             gs.morphs.URDF(file="urdf/plane/plane.urdf", fixed=True), material=mud.coupling_material(mpm_cfg)
         )
 
+        # --- Sphere: the one free 6-DOF rigid body, coupled to the mud ---
         # Mass is set through density: a solid sphere of this radius and rho weighs exactly `mass`,
         # and gets the matching solid-sphere inertia (2/5 m r^2).
         r = sphere_cfg["radius"]
@@ -80,9 +125,9 @@ class SphereDropEnv:
             gs.morphs.Sphere(radius=r, pos=sphere_cfg["pos"]),
             material=gs.materials.Rigid(
                 rho=rho,
-                friction=sphere_cfg["friction"],
+                friction=sphere_cfg["friction"],  # rigid contact (floor, walls)
                 needs_coup=True,
-                coup_friction=sphere_cfg["coup_friction"],
+                coup_friction=sphere_cfg["coup_friction"],  # sphere-mud contact
                 coup_softness=sphere_cfg["coup_softness"],
                 coup_restitution=sphere_cfg["coup_restitution"],
                 sdf_cell_size=sphere_cfg["sdf_cell_size"],
@@ -90,33 +135,36 @@ class SphereDropEnv:
             surface=gs.surfaces.Default(color=(0.75, 0.75, 0.78)),
         )
 
+        # --- Drop pit: the MPM mud fill and the rigid walls that contain it ---
         self.mud_patches = mud.add_mud_patches(self.scene, mpm_cfg)
         self.walls = mud.add_containment_walls(self.scene, mpm_cfg)
 
+        # --- Recording camera (optional) ---
         self.cam = None
         if record:
             self.cam = self.scene.add_camera(GUI=False, **cam_kwargs)
 
+        # --- Build: compile the scene with a single env; nothing can be added after this ---
         self.scene.build(n_envs=1)
         if self.cam is not None:
             self.cam.start_recording()
 
     def hold(self, pos):
-        """Pin the sphere at `pos`, upright and at rest (used while the sand settles)."""
+        """Pin the sphere at `pos`, upright and at rest (used while the mud settles)."""
         p = torch.tensor([pos], dtype=gs.tc_float, device=gs.device)
         q = torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=gs.tc_float, device=gs.device)
         self.sphere.set_pos(p, zero_velocity=True)
         self.sphere.set_quat(q, zero_velocity=True)
 
     def sphere_force(self):
-        """Force the sand exerts on the sphere, world frame, shape (3,)."""
+        """Force the mud exerts on the sphere, world frame, shape (3,)."""
         return mud.coupling_force(self.scene, [self.sphere.base_link_idx])[0, 0]
 
 
 def measure_surface(env, xy, percentile, radius):
-    """Free-surface height of the settled sand in a column of half-width `radius` around `xy`.
+    """Free-surface height of the settled mud in a column of half-width `radius` around `xy`.
 
-    Local to the impact point rather than pit-wide: the sand piles against the domain
+    Local to the impact point rather than pit-wide: the mud piles against the domain
     boundary at the edges, and the surface that matters is the one the sphere lands on.
     """
     cols = []
@@ -132,22 +180,31 @@ def measure_surface(env, xy, percentile, radius):
     return float(np.percentile(np.concatenate(cols), percentile))
 
 
-def load_config(path):
+def validate_config(path):
     """Read and validate a sphere drop config (see configs/sphere_drop.yaml)."""
     cfg = yaml.safe_load(Path(path).read_text())
     if set(cfg) != set(CONFIG_KEYS):
         raise SystemExit(f"{path}: sections must be exactly {sorted(CONFIG_KEYS)}, got {sorted(cfg)}")
+    material = cfg["mud"].get("material")
+    if material not in MATERIAL_KEYS:
+        raise SystemExit(f"{path}: mud.material must be one of {sorted(MATERIAL_KEYS)}, got {material!r}")
     for section, keys in CONFIG_KEYS.items():
+        if section == "mud":
+            keys = keys | MATERIAL_KEYS[material]
         missing, unknown = keys - set(cfg[section]), set(cfg[section]) - keys
         if missing or unknown:
             raise SystemExit(f"{path} [{section}]: missing {sorted(missing)}, unknown {sorted(unknown)}")
 
-    sph, pit = cfg["sphere"], cfg["pit"]
+    sph, pit, mud_params = cfg["sphere"], cfg["pit"], cfg["mud"]
+    # PyYAML reads an exponent without a sign (1.0e5) as a string, which would reach the material unnoticed.
+    for k in ("E", "nu", "rho"):
+        if isinstance(mud_params[k], bool) or not isinstance(mud_params[k], (int, float)):
+            raise SystemExit(f"{path}: mud.{k} must be a number, got {mud_params[k]!r} (write 1.0e+5, not 1.0e5)")
     if sph["radius"] <= 0 or sph["mass"] <= 0:
         raise SystemExit(f"{path}: sphere radius and mass must be positive")
     if sph["drop_height"] - sph["radius"] <= pit["depth"]:
         raise SystemExit(
-            f"{path}: sphere starts in the sand: bottom at {sph['drop_height'] - sph['radius']:.3f} m, sand top "
+            f"{path}: sphere starts in the mud: bottom at {sph['drop_height'] - sph['radius']:.3f} m, mud top "
             f"at {pit['depth']:.3f} m. Raise sphere.drop_height."
         )
     if max(abs(v) for v in sph["drop_xy"]) + sph["radius"] > pit["side"] / 2.0:
@@ -160,14 +217,14 @@ def main():
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                         help="YAML config, absolute or relative to the working directory")
     config_path = parser.parse_args().config
-    cfg = load_config(config_path)
-    sph, pit, sand, sim = cfg["sphere"], cfg["pit"], cfg["sand"], cfg["sim"]
+    cfg = validate_config(config_path)
+    sph, pit, mud_params, sim = cfg["sphere"], cfg["pit"], cfg["mud"], cfg["sim"]
 
     gs.init(backend=gs.cpu if sim["cpu"] else gs.gpu, precision="32", logging_level="warning")
 
-    layer = {"name": "sand", "material": "sand",
-             **{k: sand[k] for k in ("E", "nu", "rho", "friction_angle")}}
-    mpm_cfg = mud.drop_pit(layer, side=pit["side"], depth=pit["depth"], grid_density=sand["grid_density"])
+    # The material keys (material, E, nu, rho and the material's own extra key) go to the MPM patch as-is.
+    layer = {"name": "mud", **{k: v for k, v in mud_params.items() if k not in MUD_BENCH_KEYS}}
+    mpm_cfg = mud.drop_pit(layer, side=pit["side"], depth=pit["depth"], grid_density=mud_params["grid_density"])
     mpm_cfg["coup_friction"] = sph["coup_friction"]  # the floor's coupling, matched to the sphere's
     mpm_cfg["coup_softness"] = sph["coup_softness"]
 
@@ -198,15 +255,15 @@ def main():
             env.cam.render()
         step_i += 1
 
-    # Settle the sand with the sphere pinned above it, then take the datum from where the sand ended up.
+    # Settle the mud with the sphere pinned above it, then take the datum from where the mud ended up.
     surface = pit["depth"]
-    n_settle = max(0, round(sand["settle_s"] / sim["dt"]))
+    n_settle = max(0, round(mud_params["settle_s"] / sim["dt"]))
     for _ in range(n_settle):
         env.hold(release_pos)
         step()
     if n_settle:
-        surface = measure_surface(env, release_pos[:2], sand["surface_percentile"], radius=max(sph["radius"], 0.05))
-        print(f"sand settled {sand['settle_s']:.2f}s: surface {pit['depth']:.4f} -> {surface:.4f} m "
+        surface = measure_surface(env, release_pos[:2], mud_params["surface_percentile"], radius=max(sph["radius"], 0.05))
+        print(f"mud settled {mud_params['settle_s']:.2f}s: surface {pit['depth']:.4f} -> {surface:.4f} m "
               f"({(surface - pit['depth']) * 1e3:+.1f} mm)")
 
     # Release.
@@ -257,7 +314,7 @@ def main():
         metrics["t_contact_s"] = float(data["t"][first])
         metrics["impact_speed_sim_m_s"] = float(-data["vz"][first])
     else:
-        print("warning: the sphere never reached the sand surface -- lengthen sim.duration")
+        print("warning: the sphere never reached the mud surface -- lengthen sim.duration")
 
     # The config as run, so the run can be reproduced from its own folder.
     (out_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))

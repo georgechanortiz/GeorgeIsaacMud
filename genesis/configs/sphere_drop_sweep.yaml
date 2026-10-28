@@ -1,0 +1,11 @@
+# 20 mm, 32mm, 44mm radii spheres
+
+# MPM particle radius - 2.5 mm 
+
+# Density/weight/force of the particle pushing down onto the particles - matters quite a bit. 
+#   Figure out the range of forces a2 puts on the mud when its walking, get a range, then adjust 
+#   the densities so particle force applied downwards onto the particles changes
+
+# yield stress is pretty important. Id say get 10ish diff parameters
+
+# Epsilon 
