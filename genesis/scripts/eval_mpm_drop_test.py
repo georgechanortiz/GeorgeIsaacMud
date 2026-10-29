@@ -29,6 +29,7 @@ import torch
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+REPORTS_DIR = REPO_ROOT / "drop_Test_reports"
 sys.path.insert(0, str(REPO_ROOT))
 
 import genesis as gs
@@ -92,7 +93,7 @@ MUD_BENCH_KEYS = ("grid_density", "settle_s", "surface_percentile")
 class SphereDropEnv:
     """The drop pit, a rigid floor under it, and one free sphere."""
 
-    def __init__(self, mpm_cfg, sphere_cfg, dt, substeps, show_viewer=False, record=False, cam_kwargs=None):
+    def __init__(self, mpm_cfg, sphere_cfg, dt, substeps, show_viewer=False, video_path=None, video_fps=None, cam_kwargs=None):
         self.mpm_cfg = mpm_cfg
         self.dt = dt
 
@@ -139,15 +140,15 @@ class SphereDropEnv:
         self.mud_patches = mud.add_mud_patches(self.scene, mpm_cfg)
         self.walls = mud.add_containment_walls(self.scene, mpm_cfg)
 
-        # --- Recording camera (optional) ---
+        # --- Recording camera (optional): renders and encodes its own frames as the scene steps ---
         self.cam = None
-        if record:
+        if video_path is not None:
             self.cam = self.scene.add_camera(GUI=False, **cam_kwargs)
 
         # --- Build: compile the scene with a single env; nothing can be added after this ---
         self.scene.build(n_envs=1)
         if self.cam is not None:
-            self.cam.start_recording()
+            self.cam.start_recording(save_to_filename=str(video_path), fps=video_fps)
 
     def hold(self, pos):
         """Pin the sphere at `pos`, upright and at rest (used while the mud settles)."""
@@ -236,31 +237,27 @@ def main():
         lookat=(release_pos[0], release_pos[1], pit["depth"]),
         fov=40,
     )
+    # Created up front: the camera streams the video straight into it while the sim runs.
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    out_dir = REPORTS_DIR / f"{stamp}_sphere_m{sph['mass']:g}_r{sph['radius']:g}_h{sph['drop_height']:g}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ~50 fps whatever dt is (Genesis rounds to a whole number of steps per frame), so the video
+    # plays at wall-clock speed without rendering every fine step.
+    video_fps = 1.0 / (sim["dt"] * max(1, round(0.02 / sim["dt"])))
     env = SphereDropEnv(
-        mpm_cfg, sphere_cfg, sim["dt"], sim["substeps"],
-        show_viewer=not sim["headless"], record=sim["video"], cam_kwargs=cam_kwargs,
+        mpm_cfg, sphere_cfg, sim["dt"], sim["substeps"], show_viewer=not sim["headless"],
+        video_path=out_dir / "rollout.mp4" if sim["video"] else None, video_fps=video_fps, cam_kwargs=cam_kwargs,
     )
     print(f"MPM particles: {mud.particle_counts(mpm_cfg, env.mud_patches)}")
     print(f"sphere: r {sph['radius']:.3f} m, mass {float(env.sphere.get_mass()):.3f} kg")
-
-    # Render at ~50 fps whatever --dt is, so the video plays at wall-clock speed without
-    # rendering every fine step.
-    render_every = max(1, round(0.02 / sim["dt"]))
-    step_i = 0
-
-    def step():
-        nonlocal step_i
-        env.scene.step()
-        if env.cam is not None and step_i % render_every == 0:
-            env.cam.render()
-        step_i += 1
 
     # Settle the mud with the sphere pinned above it, then take the datum from where the mud ended up.
     surface = pit["depth"]
     n_settle = max(0, round(mud_params["settle_s"] / sim["dt"]))
     for _ in range(n_settle):
         env.hold(release_pos)
-        step()
+        env.scene.step()
     if n_settle:
         surface = measure_surface(env, release_pos[:2], mud_params["surface_percentile"], radius=max(sph["radius"], 0.05))
         print(f"mud settled {mud_params['settle_s']:.2f}s: surface {pit['depth']:.4f} -> {surface:.4f} m "
@@ -279,7 +276,7 @@ def main():
     rows = {k: [] for k in keys}
     n_steps = max(1, round(sim["duration"] / sim["dt"]))
     for i in range(n_steps):
-        step()
+        env.scene.step()
         pos = env.sphere.get_pos()[0].detach().cpu().numpy()
         vel = env.sphere.get_vel()[0].detach().cpu().numpy()
         ang = env.sphere.get_ang()[0].detach().cpu().numpy()
@@ -290,10 +287,6 @@ def main():
             rows[k].append(float(v))
 
     data = {k: np.asarray(v) for k, v in rows.items()}
-
-    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    out_dir = REPO_ROOT / "logs_for_1d" / f"{stamp}_sphere_m{sph['mass']:g}_r{sph['radius']:g}_h{sph['drop_height']:g}"
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     plots.plot_drop_force_time(out_dir, data)
     plots.plot_drop_depth_time(out_dir, data)
@@ -326,9 +319,8 @@ def main():
     }
 
     if env.cam is not None:
-        fps = round(1.0 / (sim["dt"] * render_every))
-        env.cam.stop_recording(save_to_filename=str(out_dir / "rollout.mp4"), fps=fps)
-        params["video"] = {"file": "rollout.mp4", "fps": fps, "includes_settle_phase": True}
+        env.cam.stop_recording()
+        params["video"] = {"file": "rollout.mp4", "fps": video_fps, "includes_settle_phase": True}
 
     (out_dir / "params.json").write_text(json.dumps(params, indent=2, default=str))
 

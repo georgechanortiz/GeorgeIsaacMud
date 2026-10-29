@@ -1,0 +1,61 @@
+{
+  "config": "/tmp/claude-1000/-home-george-Documents-research-GeorgeIsaacMud-genesis/d58c679b-0b7c-41a8-abf2-94e7e9979f27/scratchpad/video_test.yaml",
+  "settled_surface_m": 0.13568739593029022,
+  "mpm_cfg": {
+    "grid_density": 48,
+    "coup_friction": 0.4,
+    "coup_softness": 0.01,
+    "wall_height": 0.2,
+    "wall_thickness": 0.03,
+    "bounds_lower": [
+      -0.3683,
+      -0.3683,
+      -0.1
+    ],
+    "bounds_upper": [
+      0.3683,
+      0.3683,
+      0.4
+    ],
+    "patches": [
+      {
+        "name": "mud",
+        "material": "elasto_plastic",
+        "E": 20000.0,
+        "nu": 0.35,
+        "rho": 1500.0,
+        "yield_stress": 80.0,
+        "patch_lower": [
+          -0.3048,
+          -0.3048,
+          0.0
+        ],
+        "patch_upper": [
+          0.3048,
+          0.3048,
+          0.1524
+        ],
+        "color": [
+          0.78,
+          0.62,
+          0.46
+        ]
+      }
+    ]
+  },
+  "metrics": {
+    "impact_speed_pred_m_s": 2.483306926629833,
+    "max_depth_m": 0.0776578038930893,
+    "final_depth_m": 0.0776578038930893,
+    "peak_fz_n": 66.41755676269531,
+    "t_peak_fz_s": 0.25,
+    "weight_n": 9.81,
+    "t_contact_s": 0.255,
+    "impact_speed_sim_m_s": 1.782373309135437
+  },
+  "video": {
+    "file": "rollout.mp4",
+    "fps": 50.0,
+    "includes_settle_phase": true
+  }
+}
