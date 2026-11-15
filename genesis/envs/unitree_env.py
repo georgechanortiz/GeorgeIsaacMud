@@ -188,6 +188,32 @@ class UnitreeEnv:
                 "correction, so the heading hold cannot act. Set it to the trained range."
             )
 
+        # RMA actors (a2_mud's RMAModel) need a proprioceptive history and a privileged-factor
+        # group. obs_cfg["rma"] is set only for those runs (see eval_cfg.load_cfgs); without it
+        # nothing below is allocated and the per-step path is untouched.
+        self._rma = obs_cfg.get("rma")
+        if self._rma:
+            self._rma_len = int(self._rma["history_length"])
+            self._rma_prop_dim = int(self._rma["prop_dim"])
+            if self._rma_len < 1:
+                raise ValueError(f"obs_cfg['rma']['history_length'] must be >= 1, got {self._rma_len}")
+            expected = 6 + 3 * self.num_actions  # ang_vel, gravity, joint_pos, joint_vel, actions
+            if self._rma_prop_dim != expected:
+                raise ValueError(
+                    f"the actor's adaptation module takes {self._rma_prop_dim}-dim frames but this env "
+                    f"builds {expected}-dim ones (3 + 3 + 3 * {self.num_actions}); _update_rma_history "
+                    "no longer matches the term the policy was trained on"
+                )
+            # (history_length, num_envs, prop_dim), as in isaaclab.utils.buffers.CircularBuffer
+            self._rma_buf = torch.zeros((self._rma_len, num_envs, self._rma_prop_dim), dtype=gs.tc_float, device=gs.device)
+            self._rma_ptr = -1
+            # Envs whose next frame must fill every slot, as isaaclab does on the first append
+            # after a reset. True to begin with: the buffer has no history yet.
+            self._rma_fill = torch.ones((num_envs,), dtype=gs.tc_bool, device=gs.device)
+            # mu's input. Sized from the checkpoint so RMAModel.__init__ can read its width; it is
+            # never called at eval, where z comes from phi instead.
+            self._rma_factors = torch.zeros((num_envs, int(self._rma["factor_dim"])), dtype=gs.tc_float, device=gs.device)
+
         self.reset()
 
     def _effective_armature(self, armature, joint_names):
@@ -327,7 +353,11 @@ class UnitreeEnv:
         return self.get_observations(), self.rew_buf, self.reset_buf, self.extras
 
     def get_observations(self):
-        return TensorDict({"policy": self.obs_buf}, batch_size=[self.num_envs])
+        obs = TensorDict({"policy": self.obs_buf}, batch_size=[self.num_envs])
+        if self._rma:
+            obs["rma_history"] = self._rma_history_flat()
+            obs["env_factors"] = self._rma_factors
+        return obs
 
     def _reset_idx(self, envs_idx=None):
         self.robot.set_qpos(self.init_qpos, envs_idx=envs_idx, zero_velocity=True, skip_forward=True)
@@ -351,6 +381,12 @@ class UnitreeEnv:
             self.episode_length_buf.masked_fill_(envs_idx, 0)
             self.reset_buf.masked_fill_(envs_idx, True)
 
+        if self._rma:
+            if envs_idx is None:
+                self._rma_fill.fill_(True)
+            else:
+                self._rma_fill |= envs_idx
+
         self._resample_commands(envs_idx)
         self._resample_heading(envs_idx)
 
@@ -366,6 +402,47 @@ class UnitreeEnv:
             ],
             dim=-1,
         )
+        if self._rma:
+            self._update_rma_history()
+
+    def _update_rma_history(self):
+        """Append this step's proprioceptive frame to the RMA ring buffer.
+
+        The frame is a2_mud's ``rma_proprio`` observation term, whose ObsTerm carries no scale:
+
+            base_ang_vel(3) | projected_gravity(3) | joint_pos_rel(12) | joint_vel_rel(12) | last_action(12)
+
+        all **unscaled**, then clipped to the term's (-100, 100). It is therefore *not* obs_buf
+        with the commands removed: obs_buf applies the policy group's scales (ang_vel 0.25,
+        dof_vel 0.05), which the history group does not.
+        """
+        frame = torch.concatenate(
+            [
+                self.base_ang_vel,  # 3, rad/s, unscaled
+                self.projected_gravity,  # 3
+                self.dof_pos - self.default_dof_pos,  # 12
+                self.dof_vel,  # 12, rad/s, unscaled
+                self.actions,  # 12
+            ],
+            dim=-1,
+        ).clip_(-100.0, 100.0)
+
+        self._rma_ptr = (self._rma_ptr + 1) % self._rma_len
+        self._rma_buf[self._rma_ptr] = frame
+        if bool(self._rma_fill.any()):
+            # first frame after a reset: every slot holds it, so phi sees a steady history
+            self._rma_buf[:, self._rma_fill] = frame[self._rma_fill]
+            self._rma_fill.zero_()
+
+    def _rma_history_flat(self):
+        """The ring as (num_envs, history_length * prop_dim), oldest frame first.
+
+        Matches isaaclab's ``CircularBuffer.buffer`` followed by ``flatten_history_dim``: time is
+        the outer axis, so the actor's ``view(-1, history_length, prop_dim)`` lands on frame 0 =
+        oldest.
+        """
+        buf = torch.roll(self._rma_buf, shifts=self._rma_len - self._rma_ptr - 1, dims=0)
+        return buf.transpose(0, 1).reshape(self.num_envs, -1)
 
     def reset(self):
         self._reset_idx()

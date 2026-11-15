@@ -1,7 +1,10 @@
 """Turning a checkpoint into its configs and a callable policy, shared by the eval scripts.
 
 The RMA / adaptation-module code (stabilise_adaptation, et_bounds, the privileged and history
-helpers) is for the Go2 RMA runs; the A2 policies don't use it.
+helpers) serves the Go2 RMA runs and the A2 `a2_flat_rma_*` runs; the plain A2 policies don't
+use it. For an A2 RMA run, `_rma_spec` puts the dimensions phi and mu need into
+`obs_cfg["rma"]`, which is the single key that makes envs/unitree_env.py emit the "rma_history"
+and "env_factors" groups.
 """
 
 import importlib
@@ -43,10 +46,16 @@ CONFIG_BY_EXPERIMENT = {
     "a2_flat_erft_shear": "a2_flat",
     "a2_flat_shear": "a2_flat",
     "a2_flat_nomud": "a2_flat",
+    "a2_flat_rma_rom": "a2_flat",
+    "a2_flat_rma_erft": "a2_flat",
 }
 
 # RMA actors are custom rsl-rl models in the mud repo, which rsl-rl imports by name from agent.yaml.
 MUD_SRC = Path("/home/rml/Documents/george/mud/source/mud")
+
+# The A2 RMA actor (RMAModel) lives in the a2_mud repo, likewise named in agent.yaml.
+A2_MUD_SRC = Path("/home/rml/Documents/george/a2_mud/source/a2_mud")
+A2_MUD_AGENTS_PKG = "a2_mud.tasks.manager_based.a2_mud.agents"
 
 
 def _ensure_mud_models_importable():
@@ -62,6 +71,27 @@ def _ensure_mud_models_importable():
         ("mud.learning", MUD_SRC / "mud" / "learning"),
         ("mud.learning.models", MUD_SRC / "mud" / "learning" / "models"),
     ):
+        if name not in sys.modules:
+            stub = types.ModuleType(name)
+            stub.__path__ = [str(path)]
+            sys.modules[name] = stub
+
+
+def _ensure_a2_mud_models_importable():
+    """Make `a2_mud.tasks.manager_based.a2_mud.agents.*` importable without importing IsaacLab.
+
+    Same trick as _ensure_mud_models_importable: a2_mud's top-level __init__ pulls in
+    isaaclab_tasks, which Genesis does not have, so every package on the way to `agents` is
+    registered as a stub carrying only a __path__. The real modules under it are still found by
+    the normal path finder, and rma_model imports only torch, tensordict and rsl_rl.models.
+    """
+    if A2_MUD_AGENTS_PKG in sys.modules or not A2_MUD_SRC.is_dir():
+        return
+    path = A2_MUD_SRC
+    name = ""
+    for part in A2_MUD_AGENTS_PKG.split("."):
+        path = path / part
+        name = f"{name}.{part}" if name else part
         if name not in sys.modules:
             stub = types.ModuleType(name)
             stub.__path__ = [str(path)]
@@ -92,20 +122,67 @@ def resolve_policy(policy):
 def _privileged_dim_from_checkpoint(log_dir):
     """Width of the actor's privileged latent, read off the checkpoint's adaptation module.
 
-    Only RMA runs have one. envs/unitree_env.py does not emit their privileged or history
-    groups, so those runs cannot currently be replayed.
+    Only RMA runs have one. For the Go2 `adaptation_module.*` layout this is informational only:
+    envs/unitree_env.py does not emit those runs' privileged or history groups, so they cannot be
+    replayed. a2_mud's RMAModel (`adaptation.*`) can be -- see _rma_spec.
     """
-    ckpts = sorted(log_dir.glob("model_*.pt"))
-    if not ckpts:
-        return None
-    actor_sd = torch.load(ckpts[-1], map_location="cpu", weights_only=False).get("actor_state_dict")
+    actor_sd = _actor_state_dict(log_dir)
     if not actor_sd:
         return None
+    # a2_mud's RMAModel names phi `adaptation` and ends it in a single `head` Linear, so the
+    # index-based match below cannot be widened to cover it (int("embed") raises).
+    head = actor_sd.get("adaptation.head.weight")
+    if head is not None:
+        return int(head.shape[0])
     keys = [k for k in actor_sd if k.startswith("adaptation_module.") and k.endswith(".weight")]
     if not keys:
         return None
     last = max(keys, key=lambda k: int(k.split(".")[1]))
     return int(actor_sd[last].shape[0])
+
+
+def _actor_state_dict(log_dir):
+    """The actor weights of the run's last checkpoint, or None if there is none to read."""
+    ckpts = sorted(log_dir.glob("model_*.pt"))
+    if not ckpts:
+        return None
+    return torch.load(ckpts[-1], map_location="cpu", weights_only=False).get("actor_state_dict")
+
+
+def _rma_spec(log_dir, fallback_history_length=0):
+    """The env's `obs_cfg["rma"]` for a run whose actor is a2_mud's RMAModel.
+
+    Everything but the history length comes off the checkpoint, so the groups the env emits are
+    sized by the weights that will consume them:
+
+    * `factor_dim`    mu's input width  (`encoder.net.0.weight`, 17 for the A2 runs)
+    * `latent_dim`    z's width         (`adaptation.head.weight`, 8)
+    * `prop_dim`      one history frame (`adaptation.embed.0.weight`, 42)
+
+    `history_length` is in the run's params/env.yaml; `fallback_history_length` (the actor cfg in
+    agent.yaml) covers runs whose env.yaml was not saved.
+    """
+    actor_sd = _actor_state_dict(log_dir)
+    if not actor_sd:
+        raise FileNotFoundError(f"{log_dir} has no checkpoint to read the RMA dimensions from")
+    missing = [k for k in ("encoder.net.0.weight", "adaptation.head.weight", "adaptation.embed.0.weight") if k not in actor_sd]
+    if missing:
+        raise KeyError(
+            f"the actor in {log_dir} names 'rma_history' in its obs_groups but its checkpoint is missing {missing}; "
+            "it is not an a2_mud RMAModel"
+        )
+    length = _history_spec(log_dir, "rma_history")[0] or int(fallback_history_length or 0)
+    if length < 1:
+        raise ValueError(
+            f"could not find the rma_history length for {log_dir}: neither params/env.yaml nor the actor cfg in "
+            "params/agent.yaml gives one"
+        )
+    return {
+        "factor_dim": int(actor_sd["encoder.net.0.weight"].shape[1]),
+        "latent_dim": int(actor_sd["adaptation.head.weight"].shape[0]),
+        "prop_dim": int(actor_sd["adaptation.embed.0.weight"].shape[1]),
+        "history_length": length,
+    }
 
 
 def _history_spec(log_dir, history_group):
@@ -232,9 +309,26 @@ def load_cfgs(log_dir, config=None):
     else:
         obs_cfg["obs_groups"] = obs_groups
         _ensure_mud_models_importable()
+        _ensure_a2_mud_models_importable()
         priv_dim = _privileged_dim_from_checkpoint(log_dir)
         if priv_dim is not None:
             obs_cfg["privileged_dim"] = priv_dim
+        # RMA actors read "rma_history" and "env_factors" out of the observation TensorDict by
+        # name. This key is what makes the env emit them; no other run ever sets it.
+        if any("rma_history" in groups for groups in obs_groups.values()):
+            obs_cfg["rma"] = _rma_spec(log_dir, (train_cfg.get("actor") or {}).get("history_length"))
+            # Only the actor is loaded at eval (see load_policy), but rsl-rl still builds a critic
+            # and validates every observation set against the env's groups. The env has no
+            # privileged "critic" group, so redirect the sets it cannot serve.
+            emitted = {"policy", "rma_history", "env_factors"}
+            for set_name, groups in obs_groups.items():
+                missing_groups = [g for g in groups if g not in emitted]
+                if missing_groups:
+                    print(
+                        f"[INFO] obs set '{set_name}' wants {missing_groups}, which the Genesis env does not emit; "
+                        "replaying it on the policy observation (this set's model is never loaded)."
+                    )
+                    obs_groups[set_name] = ["policy"]
     history_group = (obs_groups.get("history") or [None])[0]
     if history_group:
         length, has_mud_force = _history_spec(log_dir, history_group)

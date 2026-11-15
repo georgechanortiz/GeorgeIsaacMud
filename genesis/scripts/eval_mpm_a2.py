@@ -106,6 +106,7 @@ def main():
     parser.add_argument("--yield-stress", type=float, default=80.0, metavar="PA", help="elasto_plastic only: von Mises yield stress (Pa). 80 was the best elasto-plastic match.")
     parser.add_argument("--friction-angle", type=float, default=15.0, metavar="DEG", help="sand only: Drucker-Prager friction angle (deg).")
     parser.add_argument("--coup-friction", type=float, default=0.4, help="friction between the feet/legs and the mud.")
+    cli.add_phi_args(parser)
     cli.add_seed_args(parser)
     args = parser.parse_args()
 
@@ -160,7 +161,7 @@ def main():
     total_particles = sum(patch_counts.values())
     print(f"MPM patches: {patch_counts} | total particles: {total_particles}")
 
-    policy = load_policy(env, ckpt_path, train_cfg)
+    policy = load_policy(env, ckpt_path, train_cfg, **cli.phi_kwargs(args))
 
     reporter = cli.make_reporter(
         args,
