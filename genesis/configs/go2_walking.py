@@ -1,7 +1,6 @@
-"""Config dicts for the Go2 flat-ground walking task.
+"""PPO/actor/critic settings (get_train_cfg) used for runs that ship no params/agent.yaml.
 
-Pulled out of genesis-world/examples/locomotion/go2_train.py so that train.py and
-eval.py share a single source of truth.
+get_cfgs is the original Genesis go2_train.py example task and is not used by the A2 path.
 """
 
 
@@ -51,7 +50,6 @@ def get_train_cfg(exp_name):
 def get_cfgs():
     env_cfg = {
         "num_actions": 12,
-        # joint/link names
         "default_joint_angles": {  # [rad]
             "FL_hip_joint": 0.0,
             "FR_hip_joint": 0.0,
@@ -80,13 +78,10 @@ def get_cfgs():
             "RL_thigh_joint",
             "RL_calf_joint",
         ],
-        # PD
         "kp": 20.0,
         "kd": 0.5,
-        # termination
         "termination_if_roll_greater_than": 10,  # degree
         "termination_if_pitch_greater_than": 10,
-        # base pose
         "base_init_pos": [0.0, 0.0, 0.42],
         "base_init_quat": [1.0, 0.0, 0.0, 0.0],
         "episode_length_s": 20.0,

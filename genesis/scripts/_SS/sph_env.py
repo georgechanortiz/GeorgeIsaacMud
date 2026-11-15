@@ -1,14 +1,14 @@
-"""Go2Env with a pool of SPH liquid in the robot's path."""
+"""UnitreeEnv with a pool of SPH liquid in the robot's path. Superseded: only scripts/_SS/eval_sph.py uses it."""
 
 import numpy as np
 
 import genesis as gs
 
-from envs.go2_env import Go2Env
+from envs.unitree_env import UnitreeEnv
 
 
-class Go2SPHEnv(Go2Env):
-    """Go2Env plus a pool of SPH liquid lying in the robot's path."""
+class Go2SPHEnv(UnitreeEnv):
+    """UnitreeEnv plus a pool of SPH liquid lying in the robot's path."""
 
     def __init__(self, *args, sph_cfg, **kwargs):
         self.sph_cfg = sph_cfg

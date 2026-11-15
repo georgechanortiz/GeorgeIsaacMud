@@ -21,7 +21,7 @@ import genesis as gs  # noqa: E402
 from genesis.utils.geom import transform_by_quat  # noqa: E402
 
 from envs import mud  # noqa: E402
-from envs.go2_env import Go2Env  # noqa: E402
+from envs.unitree_env import UnitreeEnv  # noqa: E402
 from envs.mpm_env import A2MPMEnv  # noqa: E402
 from scripts.mud_calibration.metrics import torque_metrics  # noqa: E402
 from scripts.unitree_policy.eval_cfg import DEFAULT_A2_POLICY, load_cfgs, load_policy, resolve_policy  # noqa: E402
@@ -45,7 +45,7 @@ def build_env(cfg):
     if mud_cfg is None:
         env_cfg["base_init_pos"] = [mud.PIT_X[0] + SPAWN_OFFSET, 0.0, env_cfg["base_init_pos"][2]]
         env_cfg["substeps"] = cfg.get("substeps", env_cfg["substeps"])
-        env = Go2Env(1, env_cfg, obs_cfg, reward_cfg, command_cfg)
+        env = UnitreeEnv(1, env_cfg, obs_cfg, reward_cfg, command_cfg)
     else:
         env_cfg["substeps"] = cfg.get("substeps", 60)
         mpm_cfg = mud.a2_mud_pit(

@@ -1,46 +1,23 @@
-"""Replay the Unitree A2 locomotion policy walking into a deformable MPM mud patch.
+"""Replay an A2 locomotion policy walking through a pit of MPM mud.
 
-The A2 counterpart of scripts/eval_mpm.py: same mud pit, same MPM materials, same reporting
-(plots, metrics, params.json and rollout.mp4 under reports/<experiment>/<timestamp>/). What
-differs is the robot, which comes from configs/a2_flat.py via the checkpoint's experiment
-directory (a2_flat, a2_flat_erft, a2_flat_nomud):
+The robot comes from configs/a2_flat.py, picked from the checkpoint's experiment directory.
 
-  * actuators are the trained IsaacLab DCMotors, per group (hip/thigh 90/2.0 at 120 N*m,
-    calf 120/2.5 at 180 N*m) with the torque-speed cap -- see scripts/tune_a2_pd.py;
-  * the policy steps physics 4 times per control step (decimation), so --substeps must be a
-    multiple of 4;
-  * torque limits are scaled with --effort-scale rather than overridden with one value,
-    because the A2's limits differ per joint group.
+Mud: one 4-inch layer on the floor, as in the hardware pit; the feet sink through it to the
+bottom, which carries the robot's weight. The default (viscous liquid, E=1e5, nu=0.35,
+rho=1500) was chosen by comparing mud-minus-flat in sim with mud-minus-grass in the A2 hardware
+bags, at 60 substeps (scripts/_SS/mud_calibration):
 
-Mud. One 4-inch (0.1016 m) layer lying directly on the floor, as in the hardware runs, where
-the feet sink through the mud to the firm bottom and the bottom, not the mud, carries the robot's
-weight. The default material was chosen against the hardware bags (a2_mud/hardware_bags: one
-grass walk, three mud walks with the same policy and gains). Those bags carry no foot forces, so
-the comparison is on joint torques (/lowstate tau_est), as mud-minus-grass in the bags against
-mud-minus-flat in the sim, each expressed as a share of the hardware grass value. Twenty
-configurations of five materials were compared at 4 inches and 60 substeps:
+    change in mud                   hardware   sim (default)
+    front calf, mean |tau|            +18%        +21%
+    front calf, 95th pct |tau|        +27%        +25%
+    rear calf, mean |tau|              -9%         +2%
+    forward speed                     -16%        -36%
 
-    mud minus grass/flat            hardware   viscous liquid (default)
-    front calf, mean |tau|            +18%          +21%
-    front calf, 95th pct |tau|        +27%          +25%
-    rear calf, mean |tau|              -9%           +2%
-    forward speed                     -16%          -36%
-    weight carried by the mud            -           4%   (feet reach the floor)
+No material reproduces the hardware's front-thigh torque and power increase. That comes from
+suction when the foot is pulled out, and Genesis' MPM coupling only pushes on a foot.
 
-Ranked on calf load and speed (scripts/mud_calibration/score.py), viscous liquid takes the top
-two places. E=2e4, a lower viscosity, ties on that score: it slows the robot a little less (-32%)
-but under-shoots the calf peaks (+20%). E=1e5 is the default because it matches both calf force
-terms within 3 points. Elasto-plastic (von Mises, yield 30-600 Pa), sand and snow follow within a
-few points. Two hardware effects are not reproduced by
-any MPM material here: the front-thigh torque rise and the near-doubling of mechanical power. Both
-come from pulling the foot out of the mud during swing (suction), and Genesis' MPM-rigid coupling
-only pushes on a foot, it never pulls. Every material also slows the sim robot about twice as much
-as real mud did, so expect conservative speeds.
-
-The liquid's viscosity is not a parameter of its own. Its shear stress is 2*mu*(F - R)F^T with F
-the per-substep deformation, so the effective viscosity is mu * substep_dt, with mu = E/(2(1+nu)).
-At E=1e5, nu=0.35 and 60 substeps per 20 ms step that is about 12 Pa*s. Changing --substeps
-therefore changes the mud: keep it at 60 to stay on this calibration, and scale --mud-E with it.
+The liquid's effective viscosity is mu * substep_dt, with mu = E / (2(1 + nu)), so changing
+--substeps changes the mud: keep 60 to stay on the calibration, or scale --mud-E with it.
 
     python scripts/eval_mpm_a2.py --reporting --headless
     python scripts/eval_mpm_a2.py --reporting --headless --material elasto_plastic --yield-stress 80 --mud-E 2e4
@@ -70,6 +47,33 @@ def _scale_effort(env_cfg, scale):
             env_cfg[key] = value * scale
 
 
+def _sci(x):
+    """1e5 -> "1e5", 3.5e6 -> "3.5e6"."""
+    mantissa, exponent = f"{x:e}".split("e")
+    return f"{mantissa.rstrip('0').rstrip('.')}e{int(exponent)}"
+
+
+def _mud_description(args):
+    return f"{args.material.replace('_', '-')} mud, {args.mud_depth * 100:.1f} cm deep"
+
+
+def _mud_settings(args, parser):
+    """Compact settings string for reports/index.csv: material, depth, E, density and substeps, plus any non-default setting."""
+    parts = [f"mud-{args.material}", f"d{args.mud_depth:g}", f"E{_sci(args.mud_E)}", f"rho{args.mud_rho:g}", f"ss{args.substeps}"]
+    if args.material == "elasto_plastic":
+        parts.append(f"ys{args.yield_stress:g}")
+    if args.material == "sand":
+        parts.append(f"fa{args.friction_angle:g}")
+    if args.inviscid:
+        parts.append("inviscid")
+    optional = {"vx": "vx", "mud_nu": "nu", "coup_friction": "cf", "grid_density": "gd", "effort_scale": "eff", "seed": "seed"}
+    for dest, short in optional.items():
+        value = getattr(args, dest)
+        if value != parser.get_default(dest):
+            parts.append(f"{short}{value:g}")
+    return "_".join(parts)
+
+
 def main():
     parser = argparse.ArgumentParser()
     cli.add_policy_arg(parser, DEFAULT_A2_POLICY)
@@ -91,8 +95,8 @@ def main():
         steps_help="maximum rollout length when --reporting is set. The rollout normally ends sooner, when the "
                    "robot reaches the far end of the pit (see --end-margin); this cap only ends runs where it stalls",
     )
-    parser.add_argument("--end-margin", type=float, default=0.55, metavar="M", help="end the rollout once the base is within M of the pit's far wall. 0.55 puts the front feet at the end of the mud while the body is still clear of the wall (the cut-off scripts/mud_calibration/run_one.py uses)")
-    # --- mud layer (defaults are the hardware-calibrated viscous liquid, see the module docstring) ---
+    parser.add_argument("--end-margin", type=float, default=0.55, metavar="M", help="end the rollout once the base is within M of the pit's far wall. 0.55 puts the front feet at the end of the mud while the body is still clear of the wall")
+    # mud layer; defaults are the calibrated material (see the module docstring)
     parser.add_argument("--mud-depth", type=float, default=0.1016, metavar="M", help="Depth of the mud layer on the floor (m). Default 0.1016 = 4 inches, the hardware pit.")
     parser.add_argument("--material", choices=("liquid", "elasto_plastic", "sand", "snow", "elastic"), default="liquid", help="MPM material of the mud layer.")
     parser.add_argument("--mud-E", type=float, default=1e5, metavar="PA", help="Young's modulus (Pa). For liquid it sets the bulk stiffness and, with --substeps, the viscosity.")
@@ -107,22 +111,20 @@ def main():
 
     ckpt_path, env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = cli.load_run(args.policy)
     if "a2" not in str(env_cfg.get("urdf", "")):
-        parser.error(f"{ckpt_path} does not resolve to an A2 config (got urdf={env_cfg.get('urdf')!r}); use scripts/eval_mpm.py for the Go2")
+        parser.error(f"{ckpt_path} does not resolve to an A2 config (got urdf={env_cfg.get('urdf')!r})")
     decimation = int(env_cfg.get("decimation", 1))
     if args.substeps % decimation:
         parser.error(f"--substeps ({args.substeps}) must be a multiple of the A2's decimation ({decimation})")
 
     cli.init_genesis(args.cpu)
 
-    # MPM is only stable with a much smaller substep than rigid-only locomotion needs. The env
-    # splits these across its `decimation` physics steps, so the substep length is unchanged.
+    # MPM needs far smaller substeps than rigid-only simulation.
     env_cfg["substeps"] = args.substeps
     if args.effort_scale != 1.0:
         print(f"effort limits scaled by {args.effort_scale}: hips/thighs {120 * args.effort_scale:g} N*m, calves {180 * args.effort_scale:g} N*m")
         _scale_effort(env_cfg, args.effort_scale)
-    cli.drive_straight(command_cfg, args.vx)  # into the patch
+    cli.drive_straight(command_cfg, args.vx)
 
-    # Same pit footprint as scripts/eval_mpm.py (12' x 32" wide), so A2 and Go2 reports are comparable.
     mud_material = {
         "material": args.material,
         "E": args.mud_E,
@@ -134,23 +136,18 @@ def main():
     }
     mpm_cfg = mud.a2_mud_pit(mud_material, args.mud_depth, grid_density=args.grid_density, coup_friction=args.coup_friction)
 
-    # Spawn standing on the mud surface (the robot sinks through it to the floor), far enough past
-    # the leading edge to clear the near wall. The A2's rear hips sit 0.26 m behind the base and, at
-    # the default 0.8 rad thigh angle, its knees fold another 0.2 m back. The Go2's 0.4 m offset
-    # therefore put both rear knees inside the wall, which pinned the rear legs and held the robot
-    # in place.
+    # 0.6 m in from the near wall: any closer and the A2's rear knees start inside the wall.
     mud.spawn_on_pit(env_cfg, mpm_cfg, offset=0.6)
     cli.jitter_spawn(env_cfg, args.seed, args.spawn_jitter)
 
-    # End the rollout at the far end of the pit rather than after a fixed time. Past it the robot
-    # stands pinned against the far wall, and that idle time dilutes every averaged metric.
+    # Stop at the far end of the pit: time spent pinned against the wall would skew the averages.
     end_x = mud.pit_end_x(mpm_cfg, args.end_margin)
 
     def reached_pit_end(env):
         return float(env.base_pos[0, 0]) >= end_x
 
     env = A2MPMEnv(
-        num_envs=1,  # MPM state is not batched cheaply; keep this at 1
+        num_envs=1,  # MPM is not batched cheaply
         env_cfg=env_cfg,
         obs_cfg=obs_cfg,
         reward_cfg=reward_cfg,
@@ -170,6 +167,8 @@ def main():
         ckpt_path,
         env,
         scene="mpm",
+        description=_mud_description(args),
+        settings=_mud_settings(args, parser),
         robot="unitree_a2",
         mpm_cfg=mpm_cfg,
         mud={

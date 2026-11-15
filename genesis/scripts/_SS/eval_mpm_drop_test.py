@@ -1,8 +1,8 @@
 """Sphere drop bench: a rigid sphere dropped into a small MPM mud pit.
 
 For validating a reduced-order mud reaction force model against Genesis's MPM ground truth
-with the simplest possible intruder. The pit is 2 ft x 2 ft and 6 in deep (envs/mud.py:
-drop_pit), filled with one layer of the A2 calibration's elasto-plastic mud (configs/sphere_drop.yaml), at
+with the simplest possible intruder. The pit is 2 ft x 2 ft and 6 in deep (drop_pit
+below), filled with one layer of the A2 calibration's elasto-plastic mud (configs/sphere_drop.yaml), at
 the same grid density and so the same particle size. A free 6-DOF
 sphere is held above it while the mud settles under gravity, then released and tracked:
 position, velocity, penetration below the settled surface, and the force the mud puts on it.
@@ -14,7 +14,7 @@ drop_height - radius - 0.1524 m.
 Every parameter (sphere, pit, mud, sim) lives in a YAML config, configs/sphere_drop.yaml
 by default; a copy of the one used is saved with each run.
 
-    python scripts/eval_mpm_drop_test.py [--config configs/sphere_drop.yaml]
+    python scripts/_SS/eval_mpm_drop_test.py [--config configs/sphere_drop.yaml]
 """
 
 import argparse
@@ -28,7 +28,7 @@ import numpy as np
 import torch
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 REPORTS_DIR = REPO_ROOT / "drop_Test_reports"
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -36,6 +36,29 @@ import genesis as gs
 
 from envs import mud
 from scripts.unitree_policy import plots
+
+
+def drop_pit(layer, side=0.6096, depth=0.1524, grid_density=48, wall_height=0.2):
+    """A square pit `side` x `side` (default 2 ft) of `layer` filled `depth` deep (default 6 in), centred on the origin.
+
+    Unlike the hardware pit, the MPM domain hugs the patch: its usable region (bounds inset by
+    3 cells) ends right at the patch's sides, so the domain boundary is what holds the material
+    in -- the rigid walls are needs_coup=False and only visual. The 1 mm slack keeps float
+    rounding from tripping patch_box's bounds check.
+    """
+    half = side / 2.0
+    lateral = half + 3.0 / grid_density + 1e-3
+    patch = {
+        "name": layer.get("name", "mud"),
+        **layer,
+        "patch_lower": (-half, -half, 0.0),
+        "patch_upper": (half, half, depth),
+        "color": layer.get("color", (0.78, 0.62, 0.46)),
+    }
+    return mud._pit(
+        grid_density, [patch], wall_height=wall_height,
+        bounds_lower=(-lateral, -lateral, -0.1), bounds_upper=(lateral, lateral, 0.4),
+    )
 
 GRAVITY = 9.81
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "sphere_drop.yaml"
@@ -225,7 +248,7 @@ def main():
 
     # The material keys (material, E, nu, rho and the material's own extra key) go to the MPM patch as-is.
     layer = {"name": "mud", **{k: v for k, v in mud_params.items() if k not in MUD_BENCH_KEYS}}
-    mpm_cfg = mud.drop_pit(layer, side=pit["side"], depth=pit["depth"], grid_density=mud_params["grid_density"])
+    mpm_cfg = drop_pit(layer, side=pit["side"], depth=pit["depth"], grid_density=mud_params["grid_density"])
     mpm_cfg["coup_friction"] = sph["coup_friction"]  # the floor's coupling, matched to the sphere's
     mpm_cfg["coup_softness"] = sph["coup_softness"]
 

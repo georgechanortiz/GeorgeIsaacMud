@@ -1,7 +1,7 @@
 """Replay a locomotion policy wading through an SPH water pool.
 
 Same policy and observation pipeline as scripts/eval.py -- the only difference is
-that the scene carries an SPH solver (envs/sph_env.py) and the robot walks through
+that the scene carries an SPH solver (sph_env.py, next to this script) and the robot walks through
 standing liquid instead of over bare ground.
 
     python scripts/eval_sph.py -p logs/2026-07-15_17-09-30/model_4999.pt
@@ -11,10 +11,10 @@ import argparse
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from envs.sph_env import Go2SPHEnv
+from sph_env import Go2SPHEnv  # scripts/_SS/sph_env.py, next to this script
 from scripts.unitree_policy import cli
 from scripts.unitree_policy.eval_cfg import DEFAULT_POLICY, load_policy
 from scripts.unitree_policy.reporting import run_rollout

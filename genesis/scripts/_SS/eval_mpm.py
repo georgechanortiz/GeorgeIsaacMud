@@ -1,8 +1,8 @@
 """Replay the Go2 locomotion policy walking into a deformable MPM mud patch.
 
-Same policy and observation pipeline as scripts/eval.py -- the only difference is
+Same policy and observation pipeline as scripts/eval_flat_a2.py -- the only difference is
 that the scene carries an MPM solver (envs/mpm_env.py) and the robot walks through
-the two-layer Go2 mud pit (envs/mud.py: go2_mud_pit) instead of bare ground: a firm
+the two-layer Go2 mud pit (go2_mud_pit below) instead of bare ground: a firm
 elastic base with a soft elasto-plastic layer on top, set by the --soft-* flags.
 
     python scripts/eval_mpm.py --reporting -p logs/Policy_B/model_1499.pt
@@ -12,14 +12,57 @@ import argparse
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
+import genesis as gs
+
 from envs import mud
-from envs.mpm_env import Go2MPMEnv
+from envs.mpm_env import A2MPMEnv
 from scripts.unitree_policy import cli
 from scripts.unitree_policy.eval_cfg import DEFAULT_POLICY, load_policy
 from scripts.unitree_policy.reporting import run_rollout
+
+
+def go2_mud_pit(soft_layer, grid_density=48):
+    """The Go2 pit: a firm elastic base 6 cm deep, with `soft_layer` (one patch dict) on top."""
+    stiff_base = {
+        "name": "stiff_mud",
+        "material": "elastic",  # firm base layer to hold the robot's weight
+        "E": 1e6,
+        "nu": 0.35,
+        "rho": 1800.0,
+        "patch_lower": (mud.PIT_X[0], -mud.PIT_HALF_WIDTH, 0.0),
+        "patch_upper": (mud.PIT_X[1], mud.PIT_HALF_WIDTH, 0.06),
+        "color": (0.30, 0.20, 0.12),
+    }
+    return mud._pit(grid_density, [stiff_base, soft_layer], wall_height=0.5)
+
+
+def soft_layer(material, z_range, **params):
+    """A soft top layer spanning the pit at heights z_range = (low, high)."""
+    return {
+        "name": "soft_mud",
+        "material": material,
+        **params,
+        "patch_lower": (mud.PIT_X[0], -mud.PIT_HALF_WIDTH, z_range[0]),
+        "patch_upper": (mud.PIT_X[1], mud.PIT_HALF_WIDTH, z_range[1]),
+        "color": (0.78, 0.62, 0.46),
+    }
+
+
+class Go2MPMEnv(A2MPMEnv):
+    """A2MPMEnv with the closer camera framing the smaller Go2 needs."""
+
+    _POS, _LOOKAT = (2.6, -2.0, 1.3), (0.8, 0.0, 0.2)
+
+    def _scene_kwargs(self, show_viewer):
+        kwargs = super()._scene_kwargs(show_viewer)
+        kwargs["viewer_options"] = gs.options.ViewerOptions(camera_pos=self._POS, camera_lookat=self._LOOKAT, camera_fov=40)
+        return kwargs
+
+    def _camera_kwargs(self):
+        return dict(res=(1280, 720), pos=self._POS, lookat=self._LOOKAT, fov=40)
 
 
 def main():
@@ -56,7 +99,7 @@ def main():
     # MPM is only stable with a much smaller substep than rigid-only locomotion needs.
     env_cfg["substeps"] = args.substeps
     if args.effort_limit is not None:
-        # Applied in Go2Env via set_dofs_force_range, so this clips the PD output itself
+        # Applied in UnitreeEnv via set_dofs_force_range, so this clips the PD output itself
         # rather than the action -- the policy is unchanged and simply operates against a
         # weaker actuator than it trained with.
         print(f"effort limit: {env_cfg.get('effort_limit')} -> {args.effort_limit} N*m")
@@ -65,8 +108,8 @@ def main():
 
     # a soft top layer that yields and flows under a foot instead of resisting, much softer
     # than the base so it deforms easily before yielding
-    mpm_cfg = mud.go2_mud_pit(
-        mud.soft_layer(
+    mpm_cfg = go2_mud_pit(
+        soft_layer(
             "elasto_plastic",
             args.soft_z,
             E=args.soft_E,

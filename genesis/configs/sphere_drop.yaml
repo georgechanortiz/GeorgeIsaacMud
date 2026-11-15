@@ -1,5 +1,5 @@
-# Sphere drop bench (scripts/eval_mpm_drop_test.py).
-# Run with:  python scripts/eval_mpm_drop_test.py [--config configs/sphere_drop.yaml]
+# Sphere drop bench (scripts/_SS/eval_mpm_drop_test.py).
+# Run with:  python scripts/_SS/eval_mpm_drop_test.py [--config configs/sphere_drop.yaml]
 # Units are SI throughout (m, kg, s, Pa). Every key is required; unknown keys are an error.
 
 sphere:

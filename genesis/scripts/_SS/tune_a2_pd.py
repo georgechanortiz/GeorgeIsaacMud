@@ -7,7 +7,7 @@ The a2_flat policies were trained with isaaclab's DCMotor: an *explicit* PD eval
 
 applied to joints with 0.03 kg*m^2 armature and no joint friction or damping.
 
-Genesis replays them through a different path (envs/go2_env.py): the PD is Genesis' built-in
+Genesis replays them through a different path (envs/unitree_env.py): the PD is Genesis' built-in
 position controller running inside the rigid solver's substep loop, and the torque-speed envelope
 can only be refreshed once per 50 Hz control step. This script drives the same A2 through both
 paths with identical 50 Hz zero-order-hold targets and measures how far the joint trajectories
@@ -16,7 +16,7 @@ drift apart:
   reference   dt = 0.005, one physics step per substep, DCMotor torque computed here in Python
               from the instantaneous state and applied with control_dofs_force -- i.e. the
               IsaacLab actuator model, reproduced exactly.
-  candidate   what Go2Env does with configs/a2_flat.py: Genesis' built-in PD
+  candidate   what UnitreeEnv does with configs/a2_flat.py: Genesis' built-in PD
               (control_dofs_position) with gains (s_kp * kp, s_kd * kd), armature reduced by the
               implicit-integrator term kd * dt, and the envelope refreshed before each of the 4
               physics steps per control step. Variants switch each of those off.
@@ -50,7 +50,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import genesis as gs  # noqa: E402
 
 from configs.a2_flat import ACTUATOR_GROUPS, get_cfgs  # noqa: E402
-from envs.go2_env import dc_motor_torque_limits, resolve_urdf  # noqa: E402
+from envs.unitree_env import dc_motor_torque_limits, resolve_urdf  # noqa: E402
 
 CONTROL_DT = 0.02
 DECIMATION = 4
@@ -151,7 +151,7 @@ def rollout_candidate(scenario, n_steps, armature, s_kp, s_kd, dc_cap=True, comp
     """Batched over the (s_kp, s_kd) grid: one env per pair.
 
     compensate mirrors env_cfg["compensate_implicit_pd"]: armature is reduced by the kd * h the
-    implicit integrator adds back (see Go2Env._effective_armature). decimation mirrors
+    implicit integrator adds back (see UnitreeEnv._effective_armature). decimation mirrors
     env_cfg["decimation"]: the torque-speed envelope is refreshed before each of that many physics
     steps per control step. Either way there are DECIMATION solver substeps per control step.
     """

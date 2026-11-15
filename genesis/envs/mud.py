@@ -1,8 +1,4 @@
-"""Building blocks for an MPM mud pit, and the pits the eval scripts use.
-
-Shared by the policy-driven MPM envs (envs/mpm_env.py), the sphere drop bench
-(scripts/eval_mpm_1d_intrusion.py) and the mud calibration (scripts/mud_calibration/run_one.py),
-so they all build the same mud the same way.
+"""Building blocks for the MPM mud pit used by envs/mpm_env.py and scripts/eval_mpm_a2.py.
 
 An mpm_cfg is a dict:
 
@@ -29,10 +25,10 @@ _BOUNDS_UPPER = (4.6576, 0.4864, 0.381)
 def _pit(grid_density, patches, wall_height, coup_friction=0.4, coup_softness=0.01,
          bounds_lower=_BOUNDS_LOWER, bounds_upper=_BOUNDS_UPPER):
     return {
-        "grid_density": grid_density,    # cells per metre. higher = finer particles, costs speed (~cubic)
-        "coup_friction": coup_friction,  # higher = more grip between the feet and the material
-        "coup_softness": coup_softness,  # metres; reach of the foot<->material coupling, see coupling_material
-        "wall_height": wall_height,      # m, from the ground up; taller than the mud + robot stance
+        "grid_density": grid_density,
+        "coup_friction": coup_friction,
+        "coup_softness": coup_softness,  # m; see coupling_material
+        "wall_height": wall_height,      # m
         "wall_thickness": 0.03,          # m
         "bounds_lower": bounds_lower,
         "bounds_upper": bounds_upper,
@@ -40,38 +36,10 @@ def _pit(grid_density, patches, wall_height, coup_friction=0.4, coup_softness=0.
     }
 
 
-def go2_mud_pit(soft_layer, grid_density=48):
-    """The Go2 pit: a firm elastic base 6 cm deep, with `soft_layer` (one patch dict) on top."""
-    stiff_base = {
-        "name": "stiff_mud",
-        "material": "elastic",  # firm base layer to hold the robot's weight
-        "E": 1e6,               # Young's modulus (Pa)
-        "nu": 0.35,             # Poisson ratio. higher = more volume-preserving; must stay < 0.5 (lam blows up near it)
-        "rho": 1800.0,          # kg/m3. Sets particle inertia / elastic wave speed, not force magnitude (that's E)
-        "patch_lower": (PIT_X[0], -PIT_HALF_WIDTH, 0.0),
-        "patch_upper": (PIT_X[1], PIT_HALF_WIDTH, 0.06),
-        "color": (0.30, 0.20, 0.12),
-    }
-    return _pit(grid_density, [stiff_base, soft_layer], wall_height=0.5)
-
-
-def soft_layer(material, z_range, **params):
-    """A soft top layer spanning the pit at heights z_range = (low, high)."""
-    return {
-        "name": "soft_mud",
-        "material": material,
-        **params,
-        "patch_lower": (PIT_X[0], -PIT_HALF_WIDTH, z_range[0]),
-        "patch_upper": (PIT_X[1], PIT_HALF_WIDTH, z_range[1]),
-        "color": (0.78, 0.62, 0.46),
-    }
-
-
 def a2_mud_pit(mud, depth, grid_density=48, coup_friction=0.4, coup_softness=0.01):
     """The A2 pit: one layer of `mud` (material name and parameters) lying directly on the floor.
 
-    As in the hardware runs, the feet sink through it to the firm bottom. The walls are 0.6 m
-    high, since the A2 stands taller than the Go2's 0.5 m walls allowed for.
+    As in the hardware runs, the feet sink through it to the firm bottom.
     """
     layer = {
         "name": "mud",
@@ -81,29 +49,6 @@ def a2_mud_pit(mud, depth, grid_density=48, coup_friction=0.4, coup_softness=0.0
         "color": (0.55, 0.42, 0.30),
     }
     return _pit(grid_density, [layer], wall_height=0.6, coup_friction=coup_friction, coup_softness=coup_softness)
-
-
-def drop_pit(layer, side=0.6096, depth=0.1524, grid_density=48, wall_height=0.2):
-    """A square pit `side` x `side` (default 2 ft) of `layer` filled `depth` deep (default 6 in), centred on the origin.
-
-    Unlike the hardware pit, the MPM domain hugs the patch: its usable region (bounds inset by
-    3 cells) ends right at the patch's sides, so the domain boundary is what holds the material
-    in -- the rigid walls are needs_coup=False and only visual. The 1 mm slack keeps float
-    rounding from tripping patch_box's bounds check.
-    """
-    half = side / 2.0
-    lateral = half + 3.0 / grid_density + 1e-3
-    patch = {
-        "name": layer.get("name", "mud"),
-        **layer,
-        "patch_lower": (-half, -half, 0.0),
-        "patch_upper": (half, half, depth),
-        "color": layer.get("color", (0.78, 0.62, 0.46)),
-    }
-    return _pit(
-        grid_density, [patch], wall_height=wall_height,
-        bounds_lower=(-lateral, -lateral, -0.1), bounds_upper=(lateral, lateral, 0.4),
-    )
 
 
 def surface_height(mpm_cfg):
@@ -139,7 +84,6 @@ def mpm_options(mpm_cfg):
 def coupling_material(mpm_cfg):
     """Rigid material for the floor and robot, coupled to the mud.
 
-    needs_coup is already the default, but coupling is the point here, so it is explicit.
     coup_softness widens the coupling reach past the default 2 mm: the grid spacing (~21 mm at
     grid_density 48) is otherwise too coarse to catch the small feet.
     """
@@ -172,9 +116,8 @@ def mpm_material(patch):
 def patch_box(patch, mpm_cfg):
     """Resolve one patch's patch_lower/patch_upper into the (pos, size) gs.morphs.Box wants.
 
-    The MPM solver insets its usable region by 3 grid cells on every axis, so the
-    valid spawn region shrinks as grid_density drops. The solver rejects out-of-bounds
-    entities but doesn't say which axis overflowed, so check it here first.
+    The MPM solver's usable region is its bounds inset by 3 grid cells. It rejects patches
+    outside that without saying which axis overflowed, so this checks first.
     """
     inset = 3.0 / mpm_cfg["grid_density"]
     label = patch.get("name", "patch")
@@ -204,32 +147,10 @@ def patch_box(patch, mpm_cfg):
     return pos, size
 
 
-def check_no_overlap(patches):
-    """Overlapping patches sample particles into the same cells -> instant blow-up.
-
-    Two axis-aligned boxes overlap iff they overlap on all three axes.
-    """
-    boxes = [
-        (np.asarray(p["patch_lower"], float), np.asarray(p["patch_upper"], float), p.get("name", i))
-        for i, p in enumerate(patches)
-    ]
-    for i in range(len(boxes)):
-        la, ua, ni = boxes[i]
-        for j in range(i + 1, len(boxes)):
-            lb, ub, nj = boxes[j]
-            if np.all(la < ub) and np.all(lb < ua):
-                raise ValueError(
-                    f"MPM patches '{ni}' and '{nj}' overlap; give them disjoint "
-                    f"patch_lower/patch_upper boxes (a gap on any one axis is enough)."
-                )
-
-
 def add_mud_patches(scene, mpm_cfg):
     """Add one entity per patch, all sharing the scene's single MPM solver. Returns them in config order."""
-    patches = mpm_cfg["patches"]
-    check_no_overlap(patches)
     entities = []
-    for patch in patches:
+    for patch in mpm_cfg["patches"]:
         pos, size = patch_box(patch, mpm_cfg)
         entities.append(
             scene.add_entity(
@@ -244,9 +165,8 @@ def add_mud_patches(scene, mpm_cfg):
 def add_containment_walls(scene, mpm_cfg):
     """Thin fixed rigid walls around the patch perimeter so the robot can't walk off the pit.
 
-    needs_coup=False keeps the walls invisible to the MPM solver -- they only block
-    the robot, not the mud. Surface is semi-transparent so the near wall doesn't
-    occlude the camera.
+    needs_coup=False: the walls block the robot but not the mud. Semi-transparent so the near
+    wall doesn't hide the robot from the camera.
     """
     lowers = np.asarray([p["patch_lower"] for p in mpm_cfg["patches"]], dtype=float)
     uppers = np.asarray([p["patch_upper"] for p in mpm_cfg["patches"]], dtype=float)
@@ -256,10 +176,10 @@ def add_containment_walls(scene, mpm_cfg):
     h = float(mpm_cfg["wall_height"])
     cx, cy = (x_lo + x_hi) / 2.0, (y_lo + y_hi) / 2.0
     x_len, y_len = x_hi - x_lo, y_hi - y_lo
-    # (pos, size); the +/-y boards run the full length so the four corners close.
+    # (pos, size); the side boards run the full length so the corners close.
     boards = [
-        ((x_lo - t / 2, cy, h / 2), (t, y_len, h)),          # near (-x), behind the spawn
-        ((x_hi + t / 2, cy, h / 2), (t, y_len, h)),          # far (+x), the edge it marches toward
+        ((x_lo - t / 2, cy, h / 2), (t, y_len, h)),          # near (-x)
+        ((x_hi + t / 2, cy, h / 2), (t, y_len, h)),          # far (+x)
         ((cx, y_lo - t / 2, h / 2), (x_len + 2 * t, t, h)),  # -y side
         ((cx, y_hi + t / 2, h / 2), (x_len + 2 * t, t, h)),  # +y side
     ]
@@ -277,9 +197,8 @@ def add_containment_walls(scene, mpm_cfg):
 def coupling_force(scene, links_idx):
     """Force the MPM material exerts on each of the given rigid links, world frame, shape (num_envs, num_links, 3).
 
-    get_links_net_contact_force() only reports rigid-rigid contacts, which are ~zero for a body
-    resting on MPM material -- the material pushes on it through the MPM<->rigid coupler instead,
-    landing in dyn_state.links.cfrc_coupling_vel. `links_idx` are global link indices.
+    get_links_net_contact_force() only reports rigid-rigid contacts. MPM forces go through the
+    coupler and land in dyn_state.links.cfrc_coupling_vel. `links_idx` are global link indices.
     """
     cfrc = scene.rigid_solver.dyn_state.links.cfrc_coupling_vel.to_numpy()
     forces = -cfrc[links_idx]               # (num_links, num_envs, 3)
@@ -294,17 +213,16 @@ def particle_counts(mpm_cfg, entities):
 class MudFootForces:
     """Mixin giving an env with self.scene and self.robot a get_foot_forces() over MPM mud."""
 
-    _calf_idx = None  # global link indices of the foot-bearing links, filled on first call
+    _calf_idx = None  # filled on first call
     foot_names = None
 
     def get_foot_forces(self):
         """Per-foot reaction force from the mud, world frame, shape (num_envs, num_feet, 3).
 
-        The foot sphere is fixed to the calf link, so the *_calf links carry the foot forces
-        (see coupling_force).
+        The feet are merged into the *_calf links, so those links carry the foot forces.
         """
         if self._calf_idx is None:
             calves = [link for link in self.robot.links if link.name.endswith("_calf")]
-            self._calf_idx = [link.idx for link in calves]  # global indices into the solver's link block
+            self._calf_idx = [link.idx for link in calves]
             self.foot_names = [link.name.replace("_calf", " foot") for link in calves]  # FL/FR/RL/RR
         return coupling_force(self.scene, self._calf_idx)

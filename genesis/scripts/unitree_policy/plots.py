@@ -1,22 +1,15 @@
-"""Report figures and their shared style.
-
-Every figure function takes the directory to write into, so the same plots serve the sim
-reports (Reporter.finalize), the hardware runs (scripts/mud_calibration/plot_hw_report.py)
-and the sphere drop bench (scripts/eval_mpm_1d_intrusion.py).
-"""
+"""Report figures and their shared style. Each function writes a PNG into `out_dir`."""
 
 import matplotlib
 
-matplotlib.use("Agg")  # report files only; never open a GUI alongside the genesis viewer
+matplotlib.use("Agg")  # files only, no GUI
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Categorical slots 1-3 of the validated reference palette, used in fixed order.
-# Three series max per axis here (hip/thigh/calf, x/y/z), so slots 4+ are never reached.
+# Series colours, in order (hip/thigh/calf, x/y/z).
 SERIES = ("#2a78d6", "#008300", "#e87ba4")
-# One colour per leg (FL, RL, FR, RR) for the hardware bag plots. quad-sdk's own CMU colours put
-# FL red next to FR green, which colour-blind readers cannot separate.
+# One colour per leg (FL, RL, FR, RR), colour-blind safe.
 LEG_SERIES = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
 INK = "#0b0b0b"
 INK_MUTED = "#52514e"
@@ -25,7 +18,7 @@ GRID = "#e0e0dc"
 
 
 def style_axes(ax, title, xlabel, ylabel):
-    """Recessive grid and axes; all text in ink tokens, never a series colour."""
+    """Shared axis style: light grid, muted labels, no top/right spines."""
     ax.set_title(title, color=INK, fontsize=11, loc="left", pad=8)
     ax.set_xlabel(xlabel, color=INK_MUTED, fontsize=9)
     ax.set_ylabel(ylabel, color=INK_MUTED, fontsize=9)
@@ -48,24 +41,14 @@ def _save(fig, out_dir, name):
 
 
 def plot_speed(out_dir, t, lin, cmd, err_x):
-    """Forward speed against its command.
-
-    v_y is deliberately absent: the command holds it at zero, so it is tracking
-    error rather than speed and lives in the lin_vel_error_y figure. err_x is the
-    same series the X error figure plots, so the RMS quoted here matches it.
-    """
+    """Forward speed against its command. v_y is in the lin_vel_error_y figure."""
     fig, ax = plt.subplots(figsize=(9, 3.6), facecolor=SURFACE)
     ax.set_facecolor(SURFACE)
-    # Command is a reference, not a peer series: muted and dashed, so the measured
-    # series keeps the categorical slot.
     ax.plot(t, cmd[:, 0], color=INK_MUTED, linewidth=1.2, linestyle="--", label="commanded v_x")
     ax.plot(t, lin[:, 0], color=SERIES[0], linewidth=1.6, label="measured v_x")
     style_axes(ax, "Base linear velocity", "time (s)", "velocity (m/s)")
-    # Headroom so the legend never sits on the trace.
     lo, hi = ax.get_ylim()
     ax.set_ylim(lo, hi + 0.22 * (hi - lo))
-    # Sits on the right end of the command line, labelling it the way the error
-    # figures label their zero line.
     rms = float(np.sqrt((err_x**2).mean()))
     ax.annotate(
         f"RMS {rms:.3f}",
@@ -82,17 +65,13 @@ def plot_speed(out_dir, t, lin, cmd, err_x):
 
 
 def plot_power(out_dir, t, p_mech, energy, cot):
-    """Mechanical joint power over the rollout, with the run totals annotated.
-
-    The dashed line is mean power -- the level whose area under it equals the total
-    energy, so the annotated joules and the trace read as the same quantity.
-    """
+    """Mechanical joint power over the rollout, with its mean and the run totals annotated."""
     fig, ax = plt.subplots(figsize=(9, 3.4), facecolor=SURFACE)
     ax.set_facecolor(SURFACE)
     mean_p = float(p_mech.mean())
     ax.axhline(mean_p, color=INK_MUTED, linewidth=1.2, linestyle="--", label="mean power")
     ax.plot(t, p_mech, color=SERIES[0], linewidth=1.4, label="sum |tau * omega|")
-    ax.set_ylim(0.0, float(p_mech.max()) * 1.30 or 1.0)  # power is non-negative; headroom for the totals
+    ax.set_ylim(0.0, float(p_mech.max()) * 1.30 or 1.0)
     style_axes(ax, "Mechanical joint power", "time (s)", "power (W)")
     ax.annotate(
         f"total {energy:.1f} J    CoT {cot:.3f}    mean {mean_p:.1f} W",
@@ -108,7 +87,7 @@ def plot_power(out_dir, t, p_mech, energy, cot):
 
 
 def plot_torques(out_dir, t, torque, joint_names):
-    """Small multiples: one panel per leg, three joints each, shared y-scale."""
+    """One panel per leg, three joints each, shared y-scale."""
     legs = [(joint_names[i][:2], slice(i, i + 3)) for i in range(0, 12, 3)]
     lim = float(np.abs(torque).max()) * 1.08 or 1.0
     fig, axes = plt.subplots(2, 2, figsize=(11, 6.4), facecolor=SURFACE, sharex=True, sharey=True)
@@ -118,15 +97,12 @@ def plot_torques(out_dir, t, torque, joint_names):
         for k, joint in enumerate(("hip", "thigh", "calf")):
             ax.plot(t, torque[:, sl][:, k], color=SERIES[k], linewidth=1.4, label=joint)
         ax.set_ylim(-lim, lim)
-        # Axes are shared, so label only the outer edges.
         style_axes(
             ax,
             f"{leg} leg",
             "time (s)" if idx >= 2 else "",
             "torque (N m)" if idx % 2 == 0 else "",
         )
-    # One figure-level legend above the panels: identity is shared across all four,
-    # and this keeps it off the data.
     handles, labels = flat[0].get_legend_handles_labels()
     fig.legend(
         handles,
@@ -145,12 +121,7 @@ def plot_torques(out_dir, t, torque, joint_names):
 
 
 def plot_foot_forces(out_dir, t, ff, names):
-    """Small multiples: one panel per foot, world-frame Fx/Fy/Fz, shared y-scale.
-
-    ff: (steps, num_feet, 3) -- the MPM mud reaction on each foot (see
-    envs.mud.MudFootForces). One panel per foot answers "each foot as a separate
-    plot"; the three series answer "break down the xyz forces".
-    """
+    """One panel per foot, world-frame Fx/Fy/Fz, shared y-scale. ff: (steps, num_feet, 3)."""
     n = ff.shape[1]
     ncol = 2
     nrow = int(np.ceil(n / ncol))
@@ -163,12 +134,10 @@ def plot_foot_forces(out_dir, t, ff, names):
         if idx >= n:
             ax.set_visible(False)  # odd foot count: hide the empty panel
             continue
-        # Zero line: Fx/Fy swing about it, Fz (support) rides above it.
         ax.axhline(0.0, color=INK_MUTED, linewidth=1.0, linestyle="--")
         for k in range(3):
             ax.plot(t, ff[:, idx, k], color=SERIES[k], linewidth=1.4, label=comps[k])
         ax.set_ylim(-lim, lim)
-        # Shared axes: label only the outer edges.
         style_axes(
             ax,
             names[idx],
@@ -193,13 +162,7 @@ def plot_foot_forces(out_dir, t, ff, names):
 
 
 def plot_total_foot_forces(out_dir, t, ff):
-    """Whole-robot reaction force: all four feet summed, one line per world-frame axis.
-
-    ff: (steps, num_feet, 3), same data as foot_forces.png but collapsed across feet --
-    this answers "what's the net push on the robot" rather than "what's each foot doing".
-    Summed F_z should hover near the robot's weight (mg), since that's what holds it up;
-    see mean_total_foot_fz_n in metrics for the same quantity as a scalar.
-    """
+    """Mud force summed over all feet, one line per world-frame axis. ff: (steps, num_feet, 3)."""
     total = ff.sum(axis=1)  # (steps, 3)
     comps = ("F_x", "F_y", "F_z")
     fig, ax = plt.subplots(figsize=(9, 3.6), facecolor=SURFACE)
@@ -213,15 +176,9 @@ def plot_total_foot_forces(out_dir, t, ff):
 
 
 def plot_phi(out_dir, t, phi, fresh):
-    """Small multiples: phi's live estimate of each privileged latent dimension,
-    one line per panel, plus a usage panel showing which steps were freshly
-    recomputed vs held over (see stabilise_adaptation in eval_cfg.py, --phi-rate).
-
-    phi: (steps, latent_dim). Dimensions mix unrelated quantities (mass, friction,
-    mud coefficients, ...) on unrelated scales, so panels do NOT share a y-axis --
-    unlike torques_by_leg / foot_forces, which are homogeneous units. Dimensions are
-    labelled by index only: their composition (which privileged term is where) is
-    training-run-specific and not reliably recoverable from the checkpoint.
+    """One panel per dimension of the adaptation module's latent estimate, plus a panel showing
+    which steps recomputed it (--phi-rate). phi: (steps, latent_dim). Dimensions have unrelated
+    units, so y-axes are not shared.
     """
     n_dims = phi.shape[1]
     n = n_dims + 1  # + the usage panel
@@ -253,12 +210,7 @@ def plot_phi(out_dir, t, phi, fresh):
 
 
 def plot_path(out_dir, pos, yaw0):
-    """Top-down trace against the commanded ray, on equal axes.
-
-    Equal aspect on purpose: it shows the path's true shape rather than magnifying a few
-    centimetres of drift into a dramatic curve. The cross_track_error figure is the zoomed
-    view of the same quantity.
-    """
+    """Top-down path against the commanded line, on equal axes."""
     fig, ax = plt.subplots(figsize=(7.5, 5.0), facecolor=SURFACE)
     ax.set_facecolor(SURFACE)
     rel = pos - pos[0]
@@ -279,9 +231,7 @@ def plot_error(out_dir, t, err, title, ylabel, name, signed=False):
     fig, ax = plt.subplots(figsize=(9, 3.2), facecolor=SURFACE)
     ax.set_facecolor(SURFACE)
     if signed:
-        # Zero line is the target; make it readable without competing with the data.
         ax.axhline(0.0, color=INK_MUTED, linewidth=1.0, linestyle="--")
-    # Single series: no legend box, the title names it.
     ax.plot(t, err, color=SERIES[0], linewidth=1.6)
     rms = float(np.sqrt((err**2).mean()))
     ax.annotate(

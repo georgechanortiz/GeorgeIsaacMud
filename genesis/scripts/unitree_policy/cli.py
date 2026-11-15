@@ -1,7 +1,4 @@
-"""Command-line flags and setup steps shared by the eval entry points (scripts/eval*.py).
-
-Each eval script adds the flag groups it supports, builds its own scene, and leaves the rest
-to these helpers:
+"""Command-line flags and setup steps shared by the eval scripts. Typical use:
 
     ckpt_path, env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = cli.load_run(args.policy)
     cli.drive_straight(command_cfg, args.vx)
@@ -11,13 +8,14 @@ to these helpers:
     cli.finish_report(reporter, env)
 """
 
+import re
 from pathlib import Path
 
 import numpy as np
 
 import genesis as gs
 
-from scripts.unitree_policy.eval_cfg import REPO_ROOT, load_cfgs, resolve_policy
+from scripts.unitree_policy.eval_cfg import REPO_ROOT, _agent_experiment_name, load_cfgs, resolve_policy
 from scripts.unitree_policy.reporting import Reporter
 
 # ---- flags -------------------------------------------------------------------------------------
@@ -51,7 +49,8 @@ def add_reporting_args(parser, steps_help="rollout length when --reporting is se
     )
     parser.add_argument("--steps", type=int, default=1000, help=steps_help)
     parser.add_argument("--out-root", type=str, default=None, metavar="DIR", help="Write reports under this directory instead of reports/.")
-    parser.add_argument("--tag", type=str, default=None, metavar="NAME", help="Report sub-directory name instead of the checkpoint's experiment name.")
+    parser.add_argument("--tag", type=str, default=None, metavar="NAME", help="Report sub-directory name instead of the policy version (e.g. v6).")
+    parser.add_argument("--desc", type=str, default=None, metavar="TEXT", help="What this run tests, in plain words; goes in the description column of reports/index.csv. Defaults to a short summary of the scene.")
 
 
 def add_phi_args(parser):
@@ -92,10 +91,7 @@ def load_run(policy):
 def drive_straight(command_cfg, vx):
     """Pin the command to `vx` straight ahead.
 
-    Without a heading controller there is nothing to hold the line, so an open-loop zero yaw rate
-    is the best available. With one configured (as every run here was trained), ang_vel_range is
-    the *clip* on its correction rather than the command -- zeroing it would clamp the correction
-    away and let the walk curve -- so it is left at the trained range.
+    With the heading controller on, ang_vel_range is the clip on its correction, so it is left alone.
     """
     command_cfg["lin_vel_x_range"] = [vx, vx]
     command_cfg["lin_vel_y_range"] = [0.0, 0.0]
@@ -104,13 +100,7 @@ def drive_straight(command_cfg, vx):
 
 
 def jitter_spawn(env_cfg, seed, half_width):
-    """Offset the spawn x/y by a seeded uniform draw in [-half_width, half_width]. No-op without a seed.
-
-    Otherwise every repeat starts from the same state, and differs only by floating-point
-    nondeterminism in the GPU particle solvers (MPM, SPH): about 1-5% on the report metrics,
-    while rigid-only rollouts repeat bit for bit. Offsetting the spawn changes which part of the
-    patch each foot strikes and the gait phase at contact, without altering the commanded task.
-    """
+    """Offset the spawn x/y by a seeded uniform draw in [-half_width, half_width]. No-op without a seed."""
     if seed is None:
         return
     rng = np.random.default_rng(seed)
@@ -123,20 +113,29 @@ def jitter_spawn(env_cfg, seed, half_width):
 # ---- reporting ---------------------------------------------------------------------------------
 
 
-def make_reporter(args, ckpt_path, env, scene, **params):
-    """A Reporter for this run when --reporting is set, else None.
+def _policy_version(run_name):
+    """The policy's name for report folders: "v6_erft" stays as is; "2026-10-08_21-07-46_v1" -> "v1"."""
+    match = re.search(r"(?:^|_)(v\d+)$", run_name)
+    return match.group(1) if match else run_name
 
-    params.json carries the run identity, `scene`, the scene-specific `params`, then the env
-    settings every report shares.
+
+def make_reporter(args, ckpt_path, env, scene, description="", settings="", **params):
+    """A Reporter for this run when --reporting is set, else None. `params` go into params.json.
+
+    `description` (overridden by --desc) and `settings` fill the run's row in reports/index.csv.
     """
     if not args.reporting:
         return None
+    version = _policy_version(ckpt_path.parent.name)
     return Reporter(
-        experiment=args.tag or ckpt_path.parent.parent.name,
+        experiment=args.tag or version,
         params={
             "policy": str(ckpt_path),
-            "run": ckpt_path.parent.name,
+            "run": version,
+            "training_experiment": _agent_experiment_name(ckpt_path.parent) or ckpt_path.parent.parent.name,
             "scene": scene,
+            "description": args.desc or description,
+            "settings": settings,
             **params,
             "num_envs": env.num_envs,
             "dt": env.dt,

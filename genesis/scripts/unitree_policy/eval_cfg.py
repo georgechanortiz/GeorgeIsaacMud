@@ -1,9 +1,7 @@
-"""Config and policy loading shared by every eval entry point.
+"""Turning a checkpoint into its configs and a callable policy, shared by the eval scripts.
 
-scripts/eval.py, scripts/eval_mpm.py and scripts/eval_sph.py differ only in the
-scene they build; how a checkpoint becomes a callable policy lives here so that
-architectural changes to loading (e.g. adding an RMA-style adaptation module)
-happen in one place.
+The RMA / adaptation-module code (stabilise_adaptation, et_bounds, the privileged and history
+helpers) is for the Go2 RMA runs; the A2 policies don't use it.
 """
 
 import importlib
@@ -31,34 +29,31 @@ import genesis as gs
 
 __all__ = ["DEFAULT_A2_POLICY", "DEFAULT_CONFIG", "DEFAULT_POLICY", "REPO_ROOT", "load_cfgs", "load_policy", "resolve_policy"]
 
-# Env config used when a run has no cfgs.pkl of its own (i.e. anything trained outside
-# this repo). Change here rather than per-script so all three entry points agree.
+# configs/ module for runs whose experiment is not in CONFIG_BY_EXPERIMENT
 DEFAULT_CONFIG = "go2_mud_flat"
 DEFAULT_POLICY = "logs/go2_mud_flat/2026-07-15_17-09-30/model_4999.pt"
-DEFAULT_A2_POLICY = "Policies/a2_flat/2026-10-08_21-07-46/model_4999.pt"
+DEFAULT_A2_POLICY = "Policies/v1_rom/model_4999.pt"
 
-# Genesis-side dynamics differ per experiment (base height, hip defaults), so map the
-# experiment directory -- logs/<experiment>/<run>/model_*.pt -- to a configs/ module.
+# experiment name (logs/<experiment>/<run>/model_*.pt) -> configs/ module
 CONFIG_BY_EXPERIMENT = {
     "unitree_go2_flat_rma": "go2_rma",
     "unitree_go2_flat_privobs": "go2_mud_flat",
-    # Unitree A2 runs from a2_mud/logs/rsl_rl, which share one robot and actuator setup.
     "a2_flat": "a2_flat",
     "a2_flat_erft": "a2_flat",
+    "a2_flat_erft_shear": "a2_flat",
+    "a2_flat_shear": "a2_flat",
     "a2_flat_nomud": "a2_flat",
 }
 
-# RMA / privileged-obs actors are custom rsl-rl models living in the mud repo. rsl-rl
-# resolves them by qualified name out of agent.yaml, so they must be importable.
+# RMA actors are custom rsl-rl models in the mud repo, which rsl-rl imports by name from agent.yaml.
 MUD_SRC = Path("/home/rml/Documents/george/mud/source/mud")
 
 
 def _ensure_mud_models_importable():
-    """Make `mud.learning.models.*` importable without dragging in IsaacLab.
+    """Make `mud.learning.models.*` importable without importing IsaacLab.
 
-    The model classes themselves depend only on torch/tensordict/rsl_rl, but mud's
-    top-level __init__ imports .tasks, which needs isaaclab_tasks. Register namespace
-    stubs for the parent packages so importing the leaf modules skips that __init__.
+    mud's top-level __init__ needs isaaclab_tasks, so the parent packages are registered as
+    stubs that skip it.
     """
     if "mud.learning.models" in sys.modules or not MUD_SRC.is_dir():
         return
@@ -74,14 +69,7 @@ def _ensure_mud_models_importable():
 
 
 def resolve_policy(policy):
-    """Resolve a checkpoint path into an existing file.
-
-    Accepts an absolute path or one relative to the repo root, so both of these work
-    from any working directory:
-
-        /home/.../genesis/logs/unitree_go2_flat/2026-05-28 - Baseline/model_4999.pt
-        logs/unitree_go2_flat/2026-05-28 - Baseline/model_4999.pt
-    """
+    """Resolve a checkpoint path (absolute or relative to the repo root) to an existing file."""
     path = Path(policy).expanduser()
     if not path.is_absolute():
         path = REPO_ROOT / path
@@ -102,17 +90,10 @@ def resolve_policy(policy):
 
 
 def _privileged_dim_from_checkpoint(log_dir):
-    """Ground-truth width of the actor's privileged latent, read off a checkpoint's
-    adaptation module.
+    """Width of the actor's privileged latent, read off the checkpoint's adaptation module.
 
-    envs/go2_env.py defaults obs_cfg["privileged_dim"] to 12 and nothing in this
-    fallback path (runs with no cfgs.pkl of their own) ever overrides it. That default
-    happens to match some runs by coincidence, but it silently breaks the moment a
-    run's privileged term set is a different width -- re-deriving it from env.yaml's
-    term list would have the same problem, since that list drifts independently
-    whenever a term's own width changes (e.g. mud_coeffs gaining an entry). Reading it
-    off the checkpoint itself is immune to that: it's whatever the actor actually was
-    trained with, always.
+    Only RMA runs have one. envs/unitree_env.py does not emit their privileged or history
+    groups, so those runs cannot currently be replayed.
     """
     ckpts = sorted(log_dir.glob("model_*.pt"))
     if not ckpts:
@@ -130,8 +111,7 @@ def _privileged_dim_from_checkpoint(log_dir):
 def _history_spec(log_dir, history_group):
     """Read the run's history group definition out of params/env.yaml.
 
-    Returns (history_length, has_mud_force). The adaptation module's input width is
-    history_length * sum(term dims), so both must match the trained model exactly.
+    Returns (history_length, has_mud_force).
     """
     env_yaml = log_dir / "params" / "env.yaml"
     if not env_yaml.exists():
@@ -145,11 +125,7 @@ def _history_spec(log_dir, history_group):
 
 
 def _obs_terms(log_dir, group_name):
-    """Term names in one of the run's observation groups, in declaration order.
-
-    Runs in the same experiment directory can differ in which terms they trained with,
-    so the group has to be read per-run rather than assumed from the configs/ module.
-    """
+    """Term names in one of the run's observation groups, in declaration order."""
     env_yaml = log_dir / "params" / "env.yaml"
     if not env_yaml.exists():
         return []
@@ -162,10 +138,8 @@ def _obs_terms(log_dir, group_name):
 def _migrate_legacy_agent_cfg(train_cfg):
     """Rewrite a pre-5.0 rsl-rl agent cfg (one `policy: ActorCritic` block) as 5.x actor/critic cfgs.
 
-    The a2_mud runs were trained on an rsl-rl that still bundled actor and critic into a single
-    ActorCritic module; rsl-rl >= 5 builds them as two MLPModels and refuses the old key. Only the
-    plain MLP ActorCritic is translated -- anything else (recurrent, custom RMA classes) is left
-    alone so it fails loudly rather than loading the wrong architecture.
+    The A2 runs were trained on rsl-rl < 5. Only the plain MLP ActorCritic is translated; anything
+    else is left to fail loudly.
     """
     policy = train_cfg.get("policy")
     if "actor" in train_cfg or not isinstance(policy, dict) or policy.get("class_name") != "ActorCritic":
@@ -198,7 +172,6 @@ def _migrate_legacy_checkpoint(loaded):
 
     Old: model_state_dict = {actor.N.*, critic.N.*, std | log_std, [actor_obs_normalizer.*]}.
     New: actor_state_dict = {mlp.N.*, distribution.std_param, [obs_normalizer.*]}.
-    Checkpoints already in the new layout pass through untouched.
     """
     if "actor_state_dict" in loaded or "model_state_dict" not in loaded:
         return loaded
@@ -215,11 +188,7 @@ def _migrate_legacy_checkpoint(loaded):
 
 
 def _agent_experiment_name(log_dir):
-    """The experiment a run was trained under, from its params/agent.yaml.
-
-    Lets a run directory that was copied out of logs/<experiment>/ on its own (e.g. straight
-    into Policies/) still map to its configs/ module.
-    """
+    """The run's experiment name from params/agent.yaml, for run directories moved out of logs/<experiment>/."""
     agent_yaml = log_dir / "params" / "agent.yaml"
     if not agent_yaml.exists():
         return None
@@ -229,11 +198,8 @@ def _agent_experiment_name(log_dir):
 def load_cfgs(log_dir, config=None):
     """Assemble (env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg) for a run.
 
-    Runs trained in this repo carry their own cfgs.pkl and are used verbatim. For runs
-    trained in IsaacLab, the env cfg comes from a configs/ module (Genesis dynamics are
-    not derivable from IsaacLab's yaml) while the *agent* cfg is read straight from the
-    run's params/agent.yaml -- that is what selects the actor class and its obs_groups,
-    so RMA / privileged-obs architectures rebuild exactly as trained.
+    A run's own cfgs.pkl is used as is. Otherwise (IsaacLab runs) the env cfgs come from a
+    configs/ module and the agent cfg from the run's params/agent.yaml.
     """
     cfgs_path = log_dir / "cfgs.pkl"
     if cfgs_path.exists():
@@ -247,9 +213,7 @@ def load_cfgs(log_dir, config=None):
     mod = importlib.import_module(f"configs.{config}")
     env_cfg, obs_cfg, reward_cfg, command_cfg = mod.get_cfgs()
 
-    # The straight-line cross_track_error term was added partway through the go2_mud
-    # runs, so runs sharing an experiment directory (and hence a configs/ module) can
-    # differ by one observation. Take it from the run's own env.yaml.
+    # Some Go2 runs have an extra cross_track_error observation (not supported by the env).
     obs_cfg["cross_track_error"] = "cross_track_error" in _obs_terms(log_dir, "policy")
 
     agent_yaml = log_dir / "params" / "agent.yaml"
@@ -257,17 +221,15 @@ def load_cfgs(log_dir, config=None):
         return env_cfg, obs_cfg, reward_cfg, command_cfg, mod.get_train_cfg(log_dir.name)
 
     train_cfg = _migrate_legacy_agent_cfg(yaml.unsafe_load(agent_yaml.read_text()))
-    train_cfg["logger"] = "tensorboard"  # never re-init the training run's wandb at eval
+    train_cfg["logger"] = "tensorboard"  # not the training run's wandb
     train_cfg["resume"] = False
 
     obs_groups = train_cfg.get("obs_groups") or {}
     if not obs_groups:
-        # Some runs ship an empty obs_groups; rsl-rl then infers "policy" for both roles
-        # and warns. Say it explicitly instead -- same behaviour, no deprecation noise.
+        # rsl-rl would infer this anyway, with a deprecation warning
         obs_groups = {"actor": ["policy"], "critic": ["policy"]}
         train_cfg["obs_groups"] = obs_groups
     else:
-        # Tell the env which groups to emit; it produces only "policy" without this.
         obs_cfg["obs_groups"] = obs_groups
         _ensure_mud_models_importable()
         priv_dim = _privileged_dim_from_checkpoint(log_dir)
@@ -282,25 +244,15 @@ def load_cfgs(log_dir, config=None):
     return env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg
 
 
-# Nominal mass of the Go2 base link, from assets/go2/urdf/go2.urdf. The mass randomization event is
-# an *additive* offset on top of this, so the absolute bound needs the nominal value.
+# Go2 base-link mass (assets/go2/urdf/go2.urdf); training randomized it by an additive offset.
 _BASE_LINK_MASS_KG = 6.921
 
 
 def et_bounds(log_dir, latent_dim, pad=0.15):
-    """Per-dimension (lo, hi) that ``e_t`` actually spanned during training, read from the run's yaml.
+    """Per-dimension (lo, hi) of ``e_t`` during training, read from the run's env.yaml, widened by ``pad``.
 
-    Order follows ``PrivilegedCfg``'s term declaration -- body_mass(1), body_com_pos(3),
-    body_material_props(3), mud_coeffs(5) -- and each term's ``scale`` is applied, because the actor
-    was trained on the *scaled* values. ``pad`` widens every bound by that fraction of its width so a
-    legitimate estimate near the edge of the distribution is not clipped.
-
-    Returns ``(lo, hi)`` as float lists, or ``(None, None)`` if the yaml is missing, an expected
-    event/param key is absent, or the dimensions do not add up to ``latent_dim`` -- in which case
-    clamping is skipped rather than guessed at. The mud force model's parametrization has already
-    changed once (a Coulomb-style ``f_range``/``c1``/``c2`` law replaced by a Herschel-Bulkley-style
-    ``f_range``/``k_range``/``n_range``/``tau_y_range`` one on at least one run seen so far), so this
-    hardcoded term list *will* go stale again -- failing closed here is deliberate.
+    Terms in order: body_mass(1), body_com_pos(3), body_material_props(3), mud_coeffs(5), each
+    times its observation scale. Returns (None, None) if the yaml doesn't match this term list.
     """
     env_yaml = log_dir / "params" / "env.yaml"
     if not env_yaml.exists():
@@ -315,13 +267,13 @@ def et_bounds(log_dir, latent_dim, pad=0.15):
 
         lo, hi = [], []
 
-        # body_mass: nominal base-link mass plus the additive randomization offset
+        # body_mass
         m_lo, m_hi = ev["randomize_rigid_body_mass_base"]["params"]["mass_distribution_params"]
         s = scale_of("body_mass")
         lo.append((_BASE_LINK_MASS_KG + m_lo) * s)
         hi.append((_BASE_LINK_MASS_KG + m_hi) * s)
 
-        # body_com_pos: x/y/z offsets
+        # body_com_pos
         s = scale_of("body_com_pos")
         com = ev["randomize_com_positions"]["params"]["com_range"]
         for axis in ("x", "y", "z"):
@@ -329,9 +281,7 @@ def et_bounds(log_dir, latent_dim, pad=0.15):
             lo.append(a * s)
             hi.append(b * s)
 
-        # body_material_props: static friction, dynamic friction, restitution.
-        # These are averaged across all bodies before being observed, so the true spread is far
-        # narrower than the per-body sampling range -- using the raw range keeps the clamp loose.
+        # body_material_props: static friction, dynamic friction, restitution
         s = scale_of("body_material_props")
         mat = ev["randomize_rigid_body_material"]["params"]
         for key in ("static_friction_range", "dynamic_friction_range", "restitution_range"):
@@ -339,7 +289,7 @@ def et_bounds(log_dir, latent_dim, pad=0.15):
             lo.append(a * s)
             hi.append(b * s)
 
-        # mud_coeffs: suction, c1, c2, area, depth -- the depth comes from its own reset event
+        # mud_coeffs: suction, c1, c2, area, depth
         s = scale_of("mud_coeffs")
         mud = ev["mud_force_term"]["params"]
         depth = mud.get("depth_range") or ev["reset_mud_depth"]["params"]["depth_range"]
@@ -368,37 +318,16 @@ def et_bounds(log_dir, latent_dim, pad=0.15):
 
 
 def stabilise_adaptation(model, bounds=(None, None), smooth=1.0, hold_steps=1, device=None):
-    """Rate-limit, clamp and EMA-smooth ``phi``'s estimate of ``e_t`` before the actor consumes it.
+    """Wrap ``model.adapt`` so ``phi``'s estimate of ``e_t`` is held, clamped and smoothed.
 
-    Why this exists: the actor is trained on the *true* ``e_t`` every step, so it learns to trust that
-    input completely. At deployment in a different simulator, ``phi`` is reading proprioceptive
-    history from dynamics it has never seen and its output is both out of range and jittery. The
-    actor faithfully switches behaviour along with it, and the gait never settles into a limit cycle.
+    Out of distribution, phi's estimate is jittery and the actor follows it. Options:
 
-    Three independent, composable damping mechanisms:
+    * ``hold_steps``: recompute only every N steps and reuse the value in between.
+    * ``bounds``: clamp to the range seen in training.
+    * ``smooth``: EMA weight on each new estimate (1.0 = off).
 
-    * ``hold_steps`` -- zero-order hold. Recompute ``phi`` only every N policy steps and reuse the
-      cached value in between, so the estimate refreshes at ``control_rate / N``. This is the most
-      physically honest of the three: the mud a robot is standing in does not change at 50 Hz, so
-      re-estimating it every control step buys nothing and only injects jitter. It also mirrors how
-      a real system would run a slow estimator alongside a fast controller.
-    * ``bounds`` -- clamp to values the actor was actually trained against.
-    * ``smooth`` -- EMA weight on each new sample: 1.0 disables it, smaller filters harder (0.1
-      keeps ~90% of the previous estimate). Applied only on refresh steps, so it composes with the
-      hold rather than fighting it.
-
-    Neither clamping nor filtering substitutes for training the actor to tolerate a wrong ``e_t`` --
-    that is a training-side fix -- but all three are free at inference and testable on an existing
-    checkpoint.
-
-    Filter state is not reset on episode boundaries, which is harmless for the single continuous
-    rollouts these scripts run.
-
-    Always wraps ``model.adapt`` (even with every damping mechanism off) so that
-    ``model.last_e_t`` (the value actually fed to the actor) and ``model.last_e_t_fresh``
-    (whether this step recomputed it or reused the held one) are available for reporting
-    -- see plot_phi in plots.py. With no flags set this is a pass-through:
-    every step is fresh and last_e_t equals the raw estimate.
+    Also sets ``model.last_e_t`` and ``model.last_e_t_fresh`` each step for the report. The filter
+    state is not reset between episodes.
     """
     lo, hi = bounds
     lo_t = torch.tensor(lo, device=device) if lo is not None else None
@@ -407,7 +336,6 @@ def stabilise_adaptation(model, bounds=(None, None), smooth=1.0, hold_steps=1, d
     state = {"z": None, "n": 0}
 
     def adapt(obs):
-        # refresh on the first call and every hold_steps thereafter; otherwise reuse the cache
         fresh = state["z"] is None or state["n"] % hold_steps == 0
         if fresh:
             z = raw_adapt(obs)
@@ -422,7 +350,7 @@ def stabilise_adaptation(model, bounds=(None, None), smooth=1.0, hold_steps=1, d
         model.last_e_t_fresh = fresh
         return state["z"]
 
-    # shadows the bound method on this instance; get_latent calls self.adapt(), so this intercepts it
+    # get_latent calls self.adapt(), so this replaces it for this instance
     model.adapt = adapt
     what = []
     if hold_steps > 1:
@@ -438,23 +366,14 @@ def stabilise_adaptation(model, bounds=(None, None), smooth=1.0, hold_steps=1, d
 def load_policy(env, ckpt_path, train_cfg, *, phi_smooth=1.0, phi_clamp=False, phi_rate_hz=None):
     """Build a runner around `env` and return a callable `obs_dict -> actions`.
 
-    Actor-only: eval never uses the critic, and checkpoints trained with an asymmetric
-    actor-critic (e.g. a privileged 48-dim critic) would otherwise fail to load here.
-
-    This is the seam for architectural changes to inference. An RMA-style setup would
-    load its adaptation module here and return a callable that runs the estimator on
-    the proprioceptive history, then feeds actor(obs, latent) -- callers only depend
-    on the returned callable, not on how it is assembled.
+    Only the actor is loaded; asymmetric-critic checkpoints would otherwise fail to load.
     """
     runner = OnPolicyRunner(env, train_cfg, str(ckpt_path.parent), device=gs.device)
     loaded = _migrate_legacy_checkpoint(torch.load(str(ckpt_path), weights_only=False, map_location=gs.device))
     runner.alg.load(loaded, {"actor": True}, True)
     policy = runner.get_inference_policy(device=gs.device)
 
-    # RMA / privileged-obs actors can source their latent either from the privileged
-    # encoder mu (training) or the adaptation module phi (deployment). Only phi runs on
-    # observations this env can produce, so force it -- otherwise the actor silently
-    # reads the zero-filled privileged group and the latent is meaningless.
+    # RMA actors: use the adaptation module (phi), since the env has no privileged observations.
     if hasattr(policy, "set_adaptation_mode"):
         policy.set_adaptation_mode(True)
         bounds = et_bounds(ckpt_path.parent, policy.latent_dim) if phi_clamp else (None, None)
